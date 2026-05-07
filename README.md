@@ -1,15 +1,15 @@
-# arrospace-server
+# arro-server
 
 FastAPI server that exposes large datasets stored as **Zarr v3** trees and
 their **ArrowSpace**-derived metadata over HTTP. Designed as a reusable
-boilerplate for ArrowSpace / arrospace infrastructure: clean adapter
+boilerplate for ArrowSpace / arrowspace infrastructure: clean adapter
 interfaces, optional dependencies, and a tiny vanilla-JS viewer for smoke
 testing dataset browsing, slicing, and metadata.
 
 ## Layout
 
 ```
-src/arrospace_server/   # Python package
+src/arro-server_server/   # Python package
   app.py                # FastAPI application factory
   settings.py           # pydantic-settings configuration
   slicing.py            # numpy-style slice/window parsing
@@ -64,16 +64,16 @@ assumes today.
 
 ## Configuration
 
-Environment variables (prefix `ARROSPACE_`, also read from `.env`):
+Environment variables (prefix `arro-server_`, also read from `.env`):
 
 | Var | Default | Notes |
 | --- | --- | --- |
-| `ARROSPACE_DATA_ROOTS` | `[]` | Comma-separated. Each entry is `path` or `label=path`. |
-| `ARROSPACE_CORS_ORIGINS` | `*` | Comma-separated origins. |
-| `ARROSPACE_DEFAULT_WINDOW` | `100` | Default `/data` page size. |
-| `ARROSPACE_MAX_WINDOW` | `10000` | Hard cap on per-request elements (per leading-axis row). |
-| `ARROSPACE_SERVE_FRONTEND` | `true` | Mount `frontend/` at `/ui`. |
-| `ARROSPACE_HOST` / `_PORT` / `_RELOAD` | `0.0.0.0` / `8000` / `0` | Uvicorn bind. |
+| `arro-server_DATA_ROOTS` | `[]` | Comma-separated. Each entry is `path` or `label=path`. |
+| `arro-server_CORS_ORIGINS` | `*` | Comma-separated origins. |
+| `arro-server_DEFAULT_WINDOW` | `100` | Default `/data` page size. |
+| `arro-server_MAX_WINDOW` | `10000` | Hard cap on per-request elements (per leading-axis row). |
+| `arro-server_SERVE_FRONTEND` | `true` | Mount `frontend/` at `/ui`. |
+| `arro-server_HOST` / `_PORT` / `_RELOAD` | `0.0.0.0` / `8000` / `0` | Uvicorn bind. |
 
 See `.env.example`.
 
@@ -87,8 +87,8 @@ pip install -e ".[dev]"
 python scripts/make_example_data.py
 
 # point at it and serve
-export ARROSPACE_DATA_ROOTS="main=$(pwd)/example_data"
-python -m arrospace_server
+export arro-server_DATA_ROOTS="main=$(pwd)/example_data"
+python -m arro-server_server
 # UI:  http://localhost:8000/ui
 # Docs: http://localhost:8000/docs
 ```
@@ -111,15 +111,15 @@ canonical name) but is a valid Dockerfile.
 
 ```bash
 # Build
-podman build -t arrospace-server -f Containerfile .
+podman build -t arro-server-server -f Containerfile .
 # or
-docker build -t arrospace-server -f Containerfile .
+docker build -t arro-server-server -f Containerfile .
 
 # Run with a host directory of Zarr data mounted read-only
 podman run --rm -p 8000:8000 \
   -v "$(pwd)/example_data:/data:ro,Z" \
-  -e ARROSPACE_DATA_ROOTS="main=/data" \
-  arrospace-server
+  -e arro-server_DATA_ROOTS="main=/data" \
+  arro-server-server
 ```
 
 Compose (works with `docker compose` and `podman-compose`):
@@ -134,7 +134,7 @@ To bake in `pyarrow` or `pyarrowspace`:
 
 ```bash
 podman build --build-arg INSTALL_ARROW=1 --build-arg INSTALL_ARROWSPACE=1 \
-  -t arrospace-server -f Containerfile .
+  -t arro-server-server -f Containerfile .
 ```
 
 `pyarrowspace` install is best-effort in the build — if the wheel is
@@ -154,7 +154,7 @@ unavailable the sidecar adapter is still functional.
 
 - Data responses are JSON previews — fine for spreadsheet windowing,
   unsuitable for very wide rows or huge slices. Element budget is enforced
-  via `ARROSPACE_MAX_WINDOW`.
+  via `arro-server_MAX_WINDOW`.
 - Group datasets are listed but not directly readable through `/data` or
   `/slice`; address their member arrays by ID.
 - The sidecar `search` is a naive substring match against `id` and `tags`.
