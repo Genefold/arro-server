@@ -1,0 +1,23 @@
+# Works with both `docker compose` and `podman-compose`.
+# Override DATA_DIR on the host to expose your Zarr roots.
+
+services:
+  arrospace:
+    build:
+      context: .
+      dockerfile: Containerfile
+      args:
+        INSTALL_ARROW: "0"
+        INSTALL_ARROWSPACE: "0"
+    image: arrospace-server:dev
+    container_name: arrospace
+    ports:
+      - "8000:8000"
+    environment:
+      ARROSPACE_DATA_ROOTS: "main=/data"
+      ARROSPACE_CORS_ORIGINS: "*"
+      ARROSPACE_DEFAULT_WINDOW: "100"
+    volumes:
+      # Override on the CLI: DATA_DIR=/path/to/zarr docker compose up
+      - "${DATA_DIR:-./example_data}:/data:ro,Z"
+    restart: unless-stopped
