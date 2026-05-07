@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ArroSpace Viewer</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <h1>ArroSpace</h1>
+      <span id="health" class="health">…</span>
+    </header>
+    <main class="layout">
+      <aside class="sidebar">
+        <h2>Datasets</h2>
+        <input id="filter" type="search" placeholder="Filter…" />
+        <ul id="dataset-list"></ul>
+      </aside>
+      <section class="content">
+        <header class="content-header">
+          <h2 id="dataset-title">Select a dataset</h2>
+          <div class="slice-controls">
+            <label>
+              slice
+              <input id="slice-input" placeholder="e.g. 0:100,:" />
+            </label>
+            <button id="apply-slice">Apply</button>
+            <button id="reset-slice">Reset</button>
+          </div>
+        </header>
+        <div class="panels">
+          <div class="panel meta-panel">
+            <h3>Metadata</h3>
+            <pre id="metadata-out">—</pre>
+            <h3>Manifold</h3>
+            <pre id="manifold-out">—</pre>
+            <h3>Stats</h3>
+            <pre id="stats-out">—</pre>
+          </div>
+          <div class="panel data-panel">
+            <h3>Data</h3>
+            <div id="data-status" class="status"></div>
+            <div id="grid" class="grid"></div>
+          </div>
+        </div>
+      </section>
+    </main>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
