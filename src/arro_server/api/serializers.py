@@ -13,15 +13,19 @@ def _safe_scalar(v: Any) -> Any:
 
     Handles numpy scalars, float NaN/Inf (replaced with None), and
     complex numbers.  Plain Python types pass through unchanged.
+
+    Note: np.float64 is a subclass of both np.floating *and* Python float,
+    so the np.floating branch must be checked first to ensure numpy floats
+    are always converted to plain Python float.
     """
-    if isinstance(v, float):
-        return None if not math.isfinite(v) else v
-    if isinstance(v, (np.floating,)):
+    if isinstance(v, np.floating):
         f = float(v)
         return None if not math.isfinite(f) else f
-    if isinstance(v, (np.integer,)):
+    if isinstance(v, float):
+        return None if not math.isfinite(v) else v
+    if isinstance(v, np.integer):
         return int(v)
-    if isinstance(v, (np.bool_,)):
+    if isinstance(v, np.bool_):
         return bool(v)
     if isinstance(v, complex):
         return {"re": v.real, "im": v.imag}
