@@ -2,6 +2,10 @@
 
 Zarr is an optional dependency. Importing this module never fails; runtime
 operations raise :class:`OptionalDependencyMissing` if zarr is unavailable.
+
+Dataset IDs are URL-safe strings produced by :func:`make_dataset_id` —
+filesystem slashes are encoded as ``--``.  Use :func:`decode_dataset_id`
+to recover the original ``(label, path)`` pair for filesystem access.
 """
 
 from __future__ import annotations
@@ -15,7 +19,7 @@ import numpy as np
 
 from ..errors import DatasetNotFound, OptionalDependencyMissing
 from ..slicing import ResolvedSlice
-from .base import DatasetHandle, DatasetSummary
+from .base import DatasetHandle, DatasetSummary, decode_dataset_id, make_dataset_id
 
 log = logging.getLogger(__name__)
 
@@ -154,7 +158,7 @@ class ZarrFilesystemBackend:
             groups = {}
         out.append(
             DatasetSummary(
-                dataset_id=f"{label}/{rel}".rstrip("/."),
+                dataset_id=make_dataset_id(label, rel),
                 root=label,
                 path=rel,
                 shape=(),
@@ -175,7 +179,7 @@ class ZarrFilesystemBackend:
     @staticmethod
     def _summarize_array(label: str, root: Path, rel: str, arr: Any) -> DatasetSummary:
         rel_clean = rel.lstrip("./") or "."
-        ds_id = f"{label}/{rel_clean}" if rel_clean != "." else label
+        ds_id = make_dataset_id(label, rel_clean)
         try:
             attrs = dict(arr.attrs)
         except Exception:
@@ -195,10 +199,7 @@ class ZarrFilesystemBackend:
 
     def open(self, dataset_id: str) -> DatasetHandle:
         _require_zarr()
-        if "/" in dataset_id:
-            label, rel = dataset_id.split("/", 1)
-        else:
-            label, rel = dataset_id, "."
+        label, rel = decode_dataset_id(dataset_id)
         root = self._roots.get(label)
         if root is None:
             raise DatasetNotFound(dataset_id)

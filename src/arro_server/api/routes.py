@@ -66,7 +66,7 @@ def list_datasets(reg: StorageRegistry = Depends(_registry)) -> dict[str, Any]:
     }
 
 
-@router.get("/datasets/{dataset_id:path}/metadata")
+@router.get("/datasets/{dataset_id}/metadata")
 def dataset_metadata(
     dataset_id: str,
     reg: StorageRegistry = Depends(_registry),
@@ -84,7 +84,7 @@ def dataset_metadata(
     }
 
 
-@router.get("/datasets/{dataset_id:path}/data")
+@router.get("/datasets/{dataset_id}/data")
 def dataset_data(
     dataset_id: str,
     offset: int = Query(0, ge=0),
@@ -122,7 +122,7 @@ def dataset_data(
     }
 
 
-@router.get("/datasets/{dataset_id:path}/slice")
+@router.get("/datasets/{dataset_id}/slice")
 def dataset_slice(
     dataset_id: str,
     spec: str = Query(..., alias="slice", description="Comma-separated per-axis slice spec"),
@@ -148,7 +148,7 @@ def dataset_slice(
 # Stats
 # ---------------------------------------------------------------------------
 
-@router.get("/datasets/{dataset_id:path}/stats")
+@router.get("/datasets/{dataset_id}/stats")
 def dataset_stats(
     dataset_id: str,
     reg: StorageRegistry = Depends(_registry),
@@ -165,7 +165,7 @@ def dataset_stats(
 # Sidecar manifold  (static JSON sidecar, no arrowspace package required)
 # ---------------------------------------------------------------------------
 
-@router.get("/datasets/{dataset_id:path}/manifold")
+@router.get("/datasets/{dataset_id}/manifold")
 def dataset_manifold(
     dataset_id: str,
     reg: StorageRegistry = Depends(_registry),
@@ -176,7 +176,6 @@ def dataset_manifold(
     This endpoint serves static metadata written by upstream tooling and does
     not require the ``arrowspace`` package.
     """
-    # Delegate path resolution to the backend via the dataset handle.
     h = reg.open(dataset_id)
     dataset_path = h.fs_path  # type: ignore[attr-defined]
     try:
@@ -194,7 +193,7 @@ def dataset_manifold(
 # ArrowSpace index lifecycle
 # ---------------------------------------------------------------------------
 
-@router.post("/datasets/{dataset_id:path}/index")
+@router.post("/datasets/{dataset_id}/index")
 def build_index(
     dataset_id: str,
     graph_params: dict[str, Any] | None = Body(
@@ -240,7 +239,7 @@ def build_index(
 # ArrowSpace query endpoints
 # ---------------------------------------------------------------------------
 
-@router.get("/datasets/{dataset_id:path}/lambdas")
+@router.get("/datasets/{dataset_id}/lambdas")
 def dataset_lambdas(
     dataset_id: str,
     adapter: ArrowSpaceAdapter = Depends(_arrowspace),
@@ -253,7 +252,7 @@ def dataset_lambdas(
     return {"id": dataset_id} | adapter.lambdas(dataset_id)
 
 
-@router.post("/datasets/{dataset_id:path}/search")
+@router.post("/datasets/{dataset_id}/search")
 def dataset_search(
     dataset_id: str,
     body: dict[str, Any] = Body(
