@@ -94,6 +94,11 @@ class ArrowSpaceAdapter(ABC):
     @abstractmethod
     def sidecar_stats(self, dataset_path: Path) -> dict[str, Any]: ...
 
+    @abstractmethod
+    def sidecar_search(
+        self, dataset_path: Path, q: str, *, limit: int = 20
+    ) -> list[dict[str, Any]]: ...
+
 
 # ---------------------------------------------------------------------------
 # Sidecar JSON adapter (no package dependency)
@@ -119,6 +124,28 @@ class _SidecarAdapter(ArrowSpaceAdapter):
     def sidecar_stats(self, dataset_path: Path) -> dict[str, Any]:
         return self._read(dataset_path, "stats.json")
 
+    def sidecar_search(
+        self, dataset_path: Path, q: str, *, limit: int = 20
+    ) -> list[dict[str, Any]]:
+        """Keyword search against ``_arrowspace/index.json``.
+
+        Raises :class:`~.errors.MetadataUnavailable` (404) when the sidecar
+        index file is absent.  Matching is case-insensitive substring search
+        against each item's ``id`` and ``tags`` fields.
+        """
+        data = self._read(dataset_path, "index.json")
+        items: list[dict[str, Any]] = data.get("items", [])
+        q_lower = q.lower()
+        results = []
+        for item in items:
+            item_id: str = str(item.get("id", ""))
+            tags: list[str] = [str(t) for t in item.get("tags", [])]
+            if q_lower in item_id.lower() or any(q_lower in t.lower() for t in tags):
+                results.append({"id": item_id, "tags": tags})
+            if len(results) >= limit:
+                break
+        return results
+
     def build_index(self, dataset_id, array, index_store, graph_params=None):
         raise OptionalDependencyMissing(
             "arrowspace",
@@ -129,7 +156,6 @@ class _SidecarAdapter(ArrowSpaceAdapter):
         raise OptionalDependencyMissing("arrowspace", "lambdas")
 
     def search(self, dataset_id, query):
-        # Sidecar text-based fallback via index.json
         raise OptionalDependencyMissing(
             "arrowspace",
             "vector search (install arrowspace or provide sidecar index.json)",
@@ -159,6 +185,9 @@ class _UnavailableAdapter(ArrowSpaceAdapter):
 
     def sidecar_stats(self, dataset_path):
         raise OptionalDependencyMissing("arrowspace", "stats sidecar")
+
+    def sidecar_search(self, dataset_path, q, *, limit=20):
+        raise OptionalDependencyMissing("arrowspace", "sidecar search")
 
 
 # ---------------------------------------------------------------------------
@@ -400,6 +429,11 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):  # pragma: no cover - optional dep
 
     def sidecar_stats(self, dataset_path: Path) -> dict[str, Any]:
         return _SidecarAdapter._read(dataset_path, "stats.json")
+
+    def sidecar_search(
+        self, dataset_path: Path, q: str, *, limit: int = 20
+    ) -> list[dict[str, Any]]:
+        return _SidecarAdapter().sidecar_search(dataset_path, q, limit=limit)
 
 
 # ---------------------------------------------------------------------------

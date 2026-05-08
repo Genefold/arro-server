@@ -193,6 +193,34 @@ def dataset_manifold(
 
 
 # ---------------------------------------------------------------------------
+# Sidecar keyword search  (GET, query-string based, no arrowspace required)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/datasets/{dataset_id}/search")
+def dataset_search_sidecar(
+    dataset_id: str,
+    q: str = Query(..., description="Keyword to match against sidecar index tags/ids."),
+    limit: int = Query(20, ge=1, le=1000),
+    reg: StorageRegistry = Depends(_registry),
+    adapter: ArrowSpaceAdapter = Depends(_arrowspace),
+) -> dict[str, Any]:
+    """Keyword search against the ``_arrowspace/index.json`` sidecar.
+
+    Returns ``{id, results: [{id, tags}, ...]}``.
+    Raises 404 when no sidecar index is present for the dataset.
+    """
+    h = reg.open(dataset_id)
+    dataset_path = h.fs_path  # type: ignore[attr-defined]
+    results = adapter.sidecar_search(dataset_path, q, limit=limit)
+    return {
+        "id": dataset_id,
+        "q": q,
+        "results": results,
+    }
+
+
+# ---------------------------------------------------------------------------
 # ArrowSpace index lifecycle
 # ---------------------------------------------------------------------------
 
@@ -202,7 +230,7 @@ def build_index(
     dataset_id: str,
     graph_params: dict[str, Any] | None = Body(
         default=None,
-        example=DEFAULT_GRAPH_PARAMS,
+        examples=[DEFAULT_GRAPH_PARAMS],
         description="ArrowSpaceBuilder graph params.  Omit to use server defaults.",
     ),
     reg: StorageRegistry = Depends(_registry),
@@ -258,11 +286,11 @@ def dataset_lambdas(
 
 
 @router.post("/datasets/{dataset_id}/search")
-def dataset_search(
+def dataset_search_vector(
     dataset_id: str,
     body: dict[str, Any] = Body(
         ...,
-        example={"vector": [0.1, 0.2, 0.3], "tau": 1.0},
+        examples=[{"vector": [0.1, 0.2, 0.3], "tau": 1.0}],
         description="Search body: 'vector' (list[float]) and optional 'tau' (float).",
     ),
     adapter: ArrowSpaceAdapter = Depends(_arrowspace),
