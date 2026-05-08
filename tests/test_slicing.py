@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import pytest
-from arrospace_server.slicing import enforce_window_budget, parse_slice
+from arro_server.slicing import enforce_window_budget, parse_slice
 
 
 def test_full_slice() -> None:
