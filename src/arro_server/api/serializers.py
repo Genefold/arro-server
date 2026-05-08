@@ -18,14 +18,14 @@ def _safe_scalar(v: Any) -> Any:
     so the np.floating branch must be checked first to ensure numpy floats
     are always converted to plain Python float.
     """
-    if isinstance(v, (np.floating,)):
+    if isinstance(v, np.floating):
         f = float(v)
         return None if not math.isfinite(f) else f
     if isinstance(v, float):
         return None if not math.isfinite(v) else v
-    if isinstance(v, (np.integer,)):
+    if isinstance(v, np.integer):
         return int(v)
-    if isinstance(v, (np.bool_,)):
+    if isinstance(v, np.bool_):
         return bool(v)
     if isinstance(v, complex):
         return {"re": v.real, "im": v.imag}
