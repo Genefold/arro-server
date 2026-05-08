@@ -21,9 +21,37 @@ def _safe_scalar(v: Any) -> Any:
         return None if not math.isfinite(f) else f
     if isinstance(v, (np.integer,)):
         return int(v)
+    if isinstance(v, (np.bool_,)):
+        return bool(v)
     if isinstance(v, complex):
         return {"re": v.real, "im": v.imag}
+    if isinstance(v, np.ndarray):
+        return v.tolist()
     return v
+
+
+def deep_sanitize(obj: Any) -> Any:
+    """Recursively coerce all numpy scalars / non-finite floats in *obj*.
+
+    Walks dicts, lists, and tuples; applies :func:`_safe_scalar` to every
+    leaf value.  This must be called on any dict that originates from Zarr
+    ``arr.attrs`` before it is returned to FastAPI, because Pydantic's JSON
+    serialiser cannot handle numpy scalar types such as ``numpy.uint8``.
+
+    Examples::
+
+        deep_sanitize({"count": np.uint8(3), "nested": {"v": np.float32(1.5)}})
+        # -> {"count": 3, "nested": {"v": 1.5}}
+
+        deep_sanitize([np.int32(0), float("nan"), "ok"])
+        # -> [0, None, "ok"]
+    """
+    if isinstance(obj, dict):
+        return {k: deep_sanitize(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        sanitized = [deep_sanitize(v) for v in obj]
+        return sanitized if isinstance(obj, list) else tuple(sanitized)
+    return _safe_scalar(obj)
 
 
 def array_to_payload(arr: np.ndarray, *, preview_max_rows: int | None = None) -> dict[str, Any]:

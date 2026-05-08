@@ -1,11 +1,7 @@
 """Filesystem-backed Zarr v3 storage backend.
 
-Zarr is an optional dependency. Importing this module never fails; runtime
+Zarr is an optional dependency.  Importing this module never fails; runtime
 operations raise :class:`OptionalDependencyMissing` if zarr is unavailable.
-
-Dataset IDs are URL-safe strings produced by :func:`make_dataset_id` —
-filesystem slashes are encoded as ``--``.  Use :func:`decode_dataset_id`
-to recover the original ``(label, path)`` pair for filesystem access.
 """
 
 from __future__ import annotations
@@ -17,6 +13,7 @@ from typing import Any
 
 import numpy as np
 
+from ..api.serializers import deep_sanitize
 from ..errors import DatasetNotFound, OptionalDependencyMissing
 from ..slicing import ResolvedSlice
 from .base import DatasetHandle, DatasetSummary, decode_dataset_id, make_dataset_id
@@ -41,16 +38,31 @@ def _require_zarr() -> None:
 
 
 def _safe_fill_value(v: Any) -> Any:
-    """Convert a Zarr fill_value to a JSON-safe scalar.
+    """Convert a Zarr fill_value to a JSON-safe Python scalar.
 
-    float NaN and Inf are not valid JSON; replace them with None so that
-    metadata responses never trigger a serialization error.
+    Handles:
+    - ``float`` NaN / Inf  -> ``None``
+    - ``numpy.floating``   -> ``float`` (with NaN/Inf -> ``None``)
+    - ``numpy.integer``    -> ``int``
+    - ``numpy.bool_``      -> ``bool``
+    - ``complex``          -> ``{"re": ..., "im": ...}``
+    - Any other numpy type -> coerced via ``deep_sanitize``
     """
+    if v is None:
+        return None
     if isinstance(v, float) and not math.isfinite(v):
         return None
+    if isinstance(v, np.floating):
+        f = float(v)
+        return None if not math.isfinite(f) else f
+    if isinstance(v, np.integer):
+        return int(v)
+    if isinstance(v, np.bool_):
+        return bool(v)
     if isinstance(v, complex):
         return {"re": v.real, "im": v.imag}
-    return v
+    # Catch-all: run through deep_sanitize for structured / exotic types.
+    return deep_sanitize(v)
 
 
 class _ZarrArrayHandle(DatasetHandle):
@@ -80,8 +92,8 @@ class _ZarrArrayHandle(DatasetHandle):
 
 class ZarrFilesystemBackend:
     """Walks configured roots looking for ``zarr.json`` markers (v3) or
-    legacy ``.zarray`` / ``.zgroup``. Each discovered array is exposed as a
-    dataset; groups are listed but not directly readable here.
+    legacy ``.zarray`` / ``.zgroup``.  Each discovered array is exposed as a
+    dataset; groups are listed but not directly readable.
     """
 
     name = "zarr-fs"
@@ -142,12 +154,10 @@ class ZarrFilesystemBackend:
         rel: str,
     ) -> list[DatasetSummary]:
         out: list[DatasetSummary] = []
-        # Use isinstance checks against the Zarr API rather than duck-typing.
         is_array = _ZARR_AVAILABLE and isinstance(node, zarr.Array)  # type: ignore[union-attr]
         if is_array:
             out.append(self._summarize_array(label, root, rel, node))
             return out
-        # It's a group — emit the group + recurse arrays inside.
         try:
             arrays = dict(node.arrays())
         except Exception:
@@ -181,7 +191,7 @@ class ZarrFilesystemBackend:
         rel_clean = rel.lstrip("./") or "."
         ds_id = make_dataset_id(label, rel_clean)
         try:
-            attrs = dict(arr.attrs)
+            attrs = deep_sanitize(dict(arr.attrs))
         except Exception:
             attrs = {}
         return DatasetSummary(
@@ -214,7 +224,9 @@ class ZarrFilesystemBackend:
             raise DatasetNotFound(f"{dataset_id} is a group, not an array")
         summary = self._summarize_array(label, root, rel, arr)
         try:
-            attrs = dict(arr.attrs)
+            # deep_sanitize ensures no numpy scalars survive into the metadata
+            # dict, which would cause PydanticSerializationError at response time.
+            attrs = deep_sanitize(dict(arr.attrs))
         except Exception:
             attrs = {}
         metadata = {
