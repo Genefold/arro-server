@@ -18,41 +18,25 @@ ArrowSpace object public surface::
     aspace.nclusters       int
     aspace.lambdas()       -> np.ndarray          eigenvalue vector
     aspace.lambdas_sorted()-> List[(float, int)]  sorted (value, original_index)
-    aspace.search(vec: np.ndarray[float64], gl, tau: float)
-                           -> List[(int, float)]  (index, score)
-    aspace.search_batch / search_hybrid / search_energy / search_linear_sorted
+    aspace.search(vec, gl, tau)  -> List[(int, float)]
+    aspace.search_batch(vecs, gl, tau) -> List[List[(int, float)]]
+    aspace.search_energy(vec, gl)      -> List[(int, float)]
+    aspace.search_hybrid(vec, gl, tau, alpha) -> List[(int, float)]
+    aspace.search_linear_sorted(vec, gl)       -> List[(int, float)]
     aspace.get_item(i)     -> item at position i
     aspace.get_all_items() -> all items
-    aspace.spot_motives_eigen / spot_motives_energy / spot_subg_motives / spot_subg_centroids
+    aspace.spot_motives_eigen()    -> List[(int, float)]
+    aspace.spot_motives_energy()   -> List[(int, float)]
+    aspace.spot_subg_centroids()   -> List[(int, float)]
+    aspace.spot_subg_motives()     -> List[(int, float)]
 
 GraphLaplacian object public surface::
 
     gl.nnodes              int
     gl.shape               (rows, cols)
     gl.graph_params        dict
-    gl.to_csr()            -> (data, indices, indptr, shape)  numpy arrays
+    gl.to_csr()            -> (data, indices, indptr, shape)
     gl.to_dense()          -> np.ndarray  2D float32
-
-The raw dataset stays as the Zarr v3 array (served by the existing Zarr
-backend).  The *graph Laplacian* produced by arrowspace is persisted as a
-second Zarr v3 array (CSR components) under::
-
-    <ARRO_SERVER_INDEX_STORE>/<dataset_id_slug>/
-        data.zarr    # gl.to_csr() -> data array  (float32)
-        indices.zarr # CSR column indices         (int64)
-        indptr.zarr  # CSR row pointers           (int64)
-        meta.json    # {nitems, nfeatures, nclusters, shape}
-
-The ``ArrowSpace`` object itself is kept in-process memory (bounded by
-``ARRO_SERVER_INDEX_CACHE_SIZE``, default 8).  The oldest entry is evicted
-when the limit is reached.  On the next server start the Zarr arrays can be
-loaded back (Phase 2 work).
-
-In-memory cache
----------------
-The live adapter uses a simple ``OrderedDict``-backed LRU bounded by
-``Settings.index_cache_size``.  Eviction is logged at INFO level so operators
-can tune the limit without surprises.
 """
 
 from __future__ import annotations
@@ -67,12 +51,12 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+from fastapi import HTTPException
 
 from .errors import MetadataUnavailable, OptionalDependencyMissing
 
 log = logging.getLogger(__name__)
 
-# Default graph params passed to ArrowSpaceBuilder.build()
 DEFAULT_GRAPH_PARAMS: dict[str, Any] = {
     "eps": 1.0,
     "k": 6,
@@ -88,8 +72,6 @@ DEFAULT_GRAPH_PARAMS: dict[str, Any] = {
 
 
 class ArrowSpaceAdapter(ABC):
-    """Common interface for all ArrowSpace backend implementations."""
-
     def __init__(self, *, available: bool, backend: str) -> None:
         self.available = available
         self.backend = backend
@@ -122,17 +104,11 @@ class ArrowSpaceAdapter(ABC):
 
 
 # ---------------------------------------------------------------------------
-# Sidecar JSON adapter (no package dependency)
+# Sidecar JSON adapter
 # ---------------------------------------------------------------------------
 
 
 class _SidecarAdapter(ArrowSpaceAdapter):
-    """Reads pre-written JSON sidecar files from ``<dataset>/_arrowspace/``.
-
-    backend = "sidecar"
-    available = True  (sidecar files are always readable when present)
-    """
-
     def __init__(self) -> None:
         super().__init__(available=True, backend="sidecar")
 
@@ -152,12 +128,6 @@ class _SidecarAdapter(ArrowSpaceAdapter):
     def sidecar_search(
         self, dataset_path: Path, q: str, *, limit: int = 20
     ) -> list[dict[str, Any]]:
-        """Keyword search against ``_arrowspace/index.json``.
-
-        Raises :class:`~.errors.MetadataUnavailable` (404) when the sidecar
-        index file is absent.  Matching is case-insensitive substring search
-        against each item's ``id`` and ``tags`` fields.
-        """
         data = self._read(dataset_path, "index.json")
         items: list[dict[str, Any]] = data.get("items", [])
         q_lower = q.lower()
@@ -192,64 +162,116 @@ class _SidecarAdapter(ArrowSpaceAdapter):
             "vector search (install arrowspace or use GET /search with sidecar index.json)",
         )
 
+    def graph_laplacian_info(self, dataset_id: str) -> dict[str, Any]:
+        raise OptionalDependencyMissing("arrowspace", "graph_laplacian_info")
+
+    def get_item(self, dataset_id: str, idx: int) -> dict[str, Any]:
+        raise OptionalDependencyMissing("arrowspace", "get_item")
+
+    def get_all_items(self, dataset_id: str) -> dict[str, Any]:
+        raise OptionalDependencyMissing("arrowspace", "get_all_items")
+
+    def search_batch(self, dataset_id: str, query: dict[str, Any]) -> dict[str, Any]:
+        raise OptionalDependencyMissing("arrowspace", "search_batch")
+
+    def search_energy(self, dataset_id: str, query: dict[str, Any]) -> dict[str, Any]:
+        raise OptionalDependencyMissing("arrowspace", "search_energy")
+
+    def search_hybrid(self, dataset_id: str, query: dict[str, Any]) -> dict[str, Any]:
+        raise OptionalDependencyMissing("arrowspace", "search_hybrid")
+
+    def search_linear_sorted(self, dataset_id: str, query: dict[str, Any]) -> dict[str, Any]:
+        raise OptionalDependencyMissing("arrowspace", "search_linear_sorted")
+
+    def spot_motives_eigen(self, dataset_id: str) -> dict[str, Any]:
+        raise OptionalDependencyMissing("arrowspace", "spot_motives_eigen")
+
+    def spot_motives_energy(self, dataset_id: str) -> dict[str, Any]:
+        raise OptionalDependencyMissing("arrowspace", "spot_motives_energy")
+
+    def spot_subg_centroids(self, dataset_id: str) -> dict[str, Any]:
+        raise OptionalDependencyMissing("arrowspace", "spot_subg_centroids")
+
+    def spot_subg_motives(self, dataset_id: str) -> dict[str, Any]:
+        raise OptionalDependencyMissing("arrowspace", "spot_subg_motives")
+
 
 # ---------------------------------------------------------------------------
-# No-op adapter (arrowspace not installed, no sidecar)
+# No-op adapter
 # ---------------------------------------------------------------------------
 
 
 class _UnavailableAdapter(ArrowSpaceAdapter):
-    """backend = "none", available = False."""
-
     def __init__(self) -> None:
         super().__init__(available=False, backend="none")
 
-    def build_index(
-        self,
-        dataset_id: str,
-        array: np.ndarray,
-        index_store: Path,
-        graph_params: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
+    def build_index(self, dataset_id, array, index_store, graph_params=None):
         raise OptionalDependencyMissing("arrowspace", "build_index")
 
-    def lambdas(self, dataset_id: str) -> dict[str, Any]:
+    def lambdas(self, dataset_id):
         raise OptionalDependencyMissing("arrowspace", "lambdas")
 
-    def search(self, dataset_id: str, query: dict[str, Any]) -> dict[str, Any]:
+    def search(self, dataset_id, query):
         raise OptionalDependencyMissing("arrowspace", "search")
 
-    def sidecar_manifold(self, dataset_path: Path) -> dict[str, Any]:
+    def sidecar_manifold(self, dataset_path):
         raise OptionalDependencyMissing("arrowspace", "manifold sidecar")
 
-    def sidecar_stats(self, dataset_path: Path) -> dict[str, Any]:
+    def sidecar_stats(self, dataset_path):
         raise OptionalDependencyMissing("arrowspace", "stats sidecar")
 
-    def sidecar_search(
-        self, dataset_path: Path, q: str, *, limit: int = 20
-    ) -> list[dict[str, Any]]:
+    def sidecar_search(self, dataset_path, q, *, limit=20):
         raise OptionalDependencyMissing("arrowspace", "sidecar search")
+
+    def graph_laplacian_info(self, dataset_id):
+        raise OptionalDependencyMissing("arrowspace", "graph_laplacian_info")
+
+    def get_item(self, dataset_id, idx):
+        raise OptionalDependencyMissing("arrowspace", "get_item")
+
+    def get_all_items(self, dataset_id):
+        raise OptionalDependencyMissing("arrowspace", "get_all_items")
+
+    def search_batch(self, dataset_id, query):
+        raise OptionalDependencyMissing("arrowspace", "search_batch")
+
+    def search_energy(self, dataset_id, query):
+        raise OptionalDependencyMissing("arrowspace", "search_energy")
+
+    def search_hybrid(self, dataset_id, query):
+        raise OptionalDependencyMissing("arrowspace", "search_hybrid")
+
+    def search_linear_sorted(self, dataset_id, query):
+        raise OptionalDependencyMissing("arrowspace", "search_linear_sorted")
+
+    def spot_motives_eigen(self, dataset_id):
+        raise OptionalDependencyMissing("arrowspace", "spot_motives_eigen")
+
+    def spot_motives_energy(self, dataset_id):
+        raise OptionalDependencyMissing("arrowspace", "spot_motives_energy")
+
+    def spot_subg_centroids(self, dataset_id):
+        raise OptionalDependencyMissing("arrowspace", "spot_subg_centroids")
+
+    def spot_subg_motives(self, dataset_id):
+        raise OptionalDependencyMissing("arrowspace", "spot_subg_motives")
 
 
 # ---------------------------------------------------------------------------
-# Bounded LRU cache helper
+# LRU cache
 # ---------------------------------------------------------------------------
 
 
 @dataclass
 class _IndexEntry:
-    """In-memory cache slot for one built index."""
-
-    aspace: Any  # arrowspace.ArrowSpace
-    gl: Any      # arrowspace.GraphLaplacian
+    aspace: Any
+    gl: Any
     nitems: int
     nfeatures: int
     nclusters: int
 
 
 class _LRUIndexCache:
-    """Simple OrderedDict-backed LRU cache with a configurable max size."""
-
     def __init__(self, maxsize: int = 8) -> None:
         self._maxsize = max(1, maxsize)
         self._data: OrderedDict[str, _IndexEntry] = OrderedDict()
@@ -266,7 +288,7 @@ class _LRUIndexCache:
         self._data[key] = entry
         while len(self._data) > self._maxsize:
             evicted, _ = self._data.popitem(last=False)
-            log.info("ArrowSpace index cache evicted '%s' (cache_size=%d)", evicted, self._maxsize)
+            log.info("ArrowSpace cache evicted '%s'", evicted)
 
     def delete(self, key: str) -> bool:
         if key in self._data:
@@ -279,111 +301,45 @@ class _LRUIndexCache:
 
 
 # ---------------------------------------------------------------------------
-# Live arrowspace adapter
+# Live adapter
 # ---------------------------------------------------------------------------
 
 
 class _ArrowSpaceAdapter(ArrowSpaceAdapter):
-    """Live adapter backed by the ``arrowspace`` package.
-
-    backend = "arrowspace"
-    available = True
-
-    Real API (confirmed via package introspection):
-
-        aspace, gl = ArrowSpaceBuilder().build(graph_params_dict, np_array_float64)
-
-    ArrowSpace attributes/methods used here:
-        .nitems, .nfeatures, .nclusters          — int scalars
-        .lambdas()                               — np.ndarray of eigenvalues
-        .lambdas_sorted()                        — List[(float, int)]
-        .search(vec: np.ndarray, gl, tau: float) — List[(int, float)]
-
-    GraphLaplacian attributes/methods used here:
-        .nnodes, .shape                          — int / (int, int)
-        .to_csr()                                — (data, indices, indptr, shape)
-        .to_dense()                              — np.ndarray
-
-    The adapter:
-    1. Accepts a ``numpy.ndarray`` (already read from Zarr by the route handler).
-    2. Calls ``ArrowSpaceBuilder().build(graph_params, array)``.
-    3. Persists the graph-Laplacian CSR components as Zarr v3 arrays under
-       ``<index_store>/<slug>/`` (best-effort; failures are logged only).
-    4. Caches (ArrowSpace, GraphLaplacian) in an LRU bounded by
-       ``Settings.index_cache_size`` (default 8).
-    """
-
     def __init__(self, module: Any, cache_size: int = 8) -> None:
         super().__init__(available=True, backend="arrowspace")
         self._mod = module
         self._cache = _LRUIndexCache(maxsize=cache_size)
 
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
     @staticmethod
     def _slug(dataset_id: str) -> str:
-        """File-system-safe slug for a dataset_id."""
         return dataset_id.replace("/", "__").replace("\\", "__")
 
-    def _persist_csr(
-        self,
-        index_store: Path,
-        slug: str,
-        gl: Any,
-        meta: dict[str, Any],
-    ) -> None:
-        """Write CSR arrays + meta.json to ``index_store/<slug>/``.
-
-        Failures here are non-fatal: the in-memory index is already cached.
-        A warning is logged so operators can tune the limit without surprises.
-
-        gl.to_csr() returns (data, indices, indptr, shape).
-        """
+    def _persist_csr(self, index_store: Path, slug: str, gl: Any, meta: dict[str, Any]) -> None:
         try:
             import zarr  # type: ignore
         except ImportError:
             log.warning("zarr not installed; graph-Laplacian will not be persisted")
             return
-
         try:
             csr_data, csr_indices, csr_indptr, csr_shape = gl.to_csr()
-
             dest = index_store / slug
             dest.mkdir(parents=True, exist_ok=True)
-
             for arr_name, arr_val in (
                 ("data", np.asarray(csr_data, dtype=np.float32)),
                 ("indices", np.asarray(csr_indices, dtype=np.int64)),
                 ("indptr", np.asarray(csr_indptr, dtype=np.int64)),
             ):
                 zarr_path = dest / f"{arr_name}.zarr"
-                z = zarr.open(
-                    str(zarr_path),
-                    mode="w",
-                    shape=arr_val.shape,
-                    dtype=arr_val.dtype,
-                    chunks=True,
-                    zarr_format=3,
-                )
+                z = zarr.open(str(zarr_path), mode="w", shape=arr_val.shape,
+                              dtype=arr_val.dtype, chunks=True, zarr_format=3)
                 z[:] = arr_val
-
             meta_dict = dict(meta)
             meta_dict["csr_shape"] = list(csr_shape)
             (dest / "meta.json").write_text(json.dumps(meta_dict))
             log.info("Persisted graph-Laplacian CSR to %s", dest)
         except Exception:
-            log.warning(
-                "Failed to persist graph-Laplacian CSR for '%s'; "
-                "in-memory index is still available for this server lifetime.",
-                slug,
-                exc_info=True,
-            )
-
-    # ------------------------------------------------------------------
-    # Index lifecycle
-    # ------------------------------------------------------------------
+            log.warning("Failed to persist CSR for '%s'", slug, exc_info=True)
 
     def build_index(
         self,
@@ -392,54 +348,26 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
         index_store: Path,
         graph_params: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Build the ArrowSpace graph-Laplacian index for *array*.
-
-        The input *array* must be a 2-D float64 ndarray (rows = items,
-        columns = features).  It is read from the Zarr backend by the
-        route handler before calling this method.
-
-        Returns dict with keys: nitems, nfeatures, nclusters.
-        """
         gp = graph_params or DEFAULT_GRAPH_PARAMS
         arr64 = np.asarray(array, dtype=np.float64)
         if arr64.ndim != 2:  # noqa: PLR2004
             raise ValueError(
                 f"arrowspace requires a 2-D array (items x features); got shape {arr64.shape}"
             )
-
-        log.info(
-            "Building arrowspace index for '%s' (shape=%s, params=%s)",
-            dataset_id,
-            arr64.shape,
-            gp,
-        )
+        log.info("Building index for '%s' shape=%s params=%s", dataset_id, arr64.shape, gp)
         aspace, gl = self._mod.ArrowSpaceBuilder().build(gp, arr64)
-
         entry = _IndexEntry(
-            aspace=aspace,
-            gl=gl,
+            aspace=aspace, gl=gl,
             nitems=int(aspace.nitems),
             nfeatures=int(aspace.nfeatures),
             nclusters=int(aspace.nclusters),
         )
         self._cache.put(dataset_id, entry)
-
-        meta = {
-            "nitems": entry.nitems,
-            "nfeatures": entry.nfeatures,
-            "nclusters": entry.nclusters,
-        }
-        # Persistence is best-effort: failures are logged but do not bubble up.
+        meta = {"nitems": entry.nitems, "nfeatures": entry.nfeatures, "nclusters": entry.nclusters}
         self._persist_csr(index_store, self._slug(dataset_id), gl, meta)
-
         return meta
 
-    # ------------------------------------------------------------------
-    # Cache retrieval helper
-    # ------------------------------------------------------------------
-
     def _get_entry(self, dataset_id: str) -> _IndexEntry:
-        """Retrieve a cached index entry or raise 404."""
         entry = self._cache.get(dataset_id)
         if entry is None:
             raise MetadataUnavailable(
@@ -449,20 +377,31 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
         return entry
 
     # ------------------------------------------------------------------
+    # Helpers shared by search methods
+    # ------------------------------------------------------------------
+
+    def _vec(self, query: dict[str, Any]) -> np.ndarray:
+        """Extract and validate 'vector' from query dict, return float64 array.
+
+        Raises HTTPException(422) if the value cannot be coerced to float64.
+        Raises MetadataUnavailable(404) if 'vector' key is absent.
+        """
+        vec = query.get("vector")
+        if vec is None:
+            raise MetadataUnavailable("'vector' is required in search body")
+        try:
+            return np.asarray(vec, dtype=np.float64)
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(
+                status_code=422,
+                detail=f"'vector' must be a list of numbers; got: {type(vec).__name__}",
+            ) from exc
+
+    # ------------------------------------------------------------------
     # Query methods
     # ------------------------------------------------------------------
 
     def lambdas(self, dataset_id: str) -> dict[str, Any]:
-        """Return Laplacian eigenvalue distribution for a built index.
-
-        Returns::
-
-            {
-                "nitems":        int,
-                "lambdas":       List[float],        # all eigenvalues, original order
-                "lambdas_sorted": [[float, int], ...]  # (value, original_index) sorted desc
-            }
-        """
         entry = self._get_entry(dataset_id)
         lam = list(entry.aspace.lambdas())
         lam_sorted = [[float(v), int(i)] for v, i in entry.aspace.lambdas_sorted()]
@@ -472,41 +411,108 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
             "lambdas_sorted": lam_sorted,
         }
 
-    def search(self, dataset_id: str, query: dict[str, Any]) -> dict[str, Any]:
-        """Vector search against the in-memory arrowspace index.
-
-        *query* must contain ``vector`` (list of float64 values).
-        Optional ``tau`` (float, default 1.0).
-
-        Returns::
-
-            {
-                "backend": "arrowspace",
-                "results": [{"index": int, "score": float}, ...]
-            }
-        """
+    def graph_laplacian_info(self, dataset_id: str) -> dict[str, Any]:
         entry = self._get_entry(dataset_id)
-        vec = query.get("vector")
-        if vec is None:
-            raise MetadataUnavailable(
-                "arrowspace search requires 'vector' key (list of float64 values)"
-            )
+        return {
+            "nnodes": int(entry.gl.nnodes),
+            "shape": list(entry.gl.shape),
+            "graph_params": entry.gl.graph_params,
+        }
+
+    def get_item(self, dataset_id: str, idx: int) -> dict[str, Any]:
+        entry = self._get_entry(dataset_id)
+        vec = entry.aspace.get_item(idx)
+        return {
+            "item_index": idx,
+            "vector": [float(v) for v in vec],
+        }
+
+    def get_all_items(self, dataset_id: str) -> dict[str, Any]:
+        entry = self._get_entry(dataset_id)
+        items = entry.aspace.get_all_items()
+        return {
+            "nitems": entry.nitems,
+            "items": [[float(v) for v in row] for row in items],
+        }
+
+    def search(self, dataset_id: str, query: dict[str, Any]) -> dict[str, Any]:
+        entry = self._get_entry(dataset_id)
+        q_arr = self._vec(query)
         tau = float(query.get("tau", 1.0))
-        q_arr = np.asarray(vec, dtype=np.float64)
         hits = entry.aspace.search(q_arr, entry.gl, tau)
         return {
             "backend": "arrowspace",
             "results": [{"index": int(i), "score": float(s)} for i, s in hits],
         }
 
+    def search_batch(self, dataset_id: str, query: dict[str, Any]) -> dict[str, Any]:
+        entry = self._get_entry(dataset_id)
+        vecs_raw = query.get("vectors")
+        if vecs_raw is None:
+            raise MetadataUnavailable("'vectors' is required in search_batch body")
+        try:
+            vecs = np.asarray(vecs_raw, dtype=np.float64)
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(status_code=422, detail="'vectors' must be a 2-D list of numbers") from exc
+        tau = float(query.get("tau", 1.0))
+        batch_hits = entry.aspace.search_batch(vecs, entry.gl, tau)
+        return {
+            "backend": "arrowspace",
+            "results": [
+                [{"index": int(i), "score": float(s)} for i, s in hits]
+                for hits in batch_hits
+            ],
+        }
+
+    def search_energy(self, dataset_id: str, query: dict[str, Any]) -> dict[str, Any]:
+        entry = self._get_entry(dataset_id)
+        q_arr = self._vec(query)
+        hits = entry.aspace.search_energy(q_arr, entry.gl)
+        return {
+            "backend": "arrowspace",
+            "results": [{"index": int(i), "score": float(s)} for i, s in hits],
+        }
+
+    def search_hybrid(self, dataset_id: str, query: dict[str, Any]) -> dict[str, Any]:
+        entry = self._get_entry(dataset_id)
+        q_arr = self._vec(query)
+        tau = float(query.get("tau", 1.0))
+        alpha = float(query.get("alpha", 0.5))
+        hits = entry.aspace.search_hybrid(q_arr, entry.gl, tau, alpha)
+        return {
+            "backend": "arrowspace",
+            "results": [{"index": int(i), "score": float(s)} for i, s in hits],
+        }
+
+    def search_linear_sorted(self, dataset_id: str, query: dict[str, Any]) -> dict[str, Any]:
+        entry = self._get_entry(dataset_id)
+        q_arr = self._vec(query)
+        hits = entry.aspace.search_linear_sorted(q_arr, entry.gl)
+        return {
+            "backend": "arrowspace",
+            "results": [{"index": int(i), "score": float(s)} for i, s in hits],
+        }
+
+    def _spot_hits(self, hits: Any) -> list[dict[str, Any]]:
+        return [{"index": int(i), "score": float(s)} for i, s in hits]
+
+    def spot_motives_eigen(self, dataset_id: str) -> dict[str, Any]:
+        entry = self._get_entry(dataset_id)
+        return {"method": "spot_motives_eigen", "results": self._spot_hits(entry.aspace.spot_motives_eigen())}
+
+    def spot_motives_energy(self, dataset_id: str) -> dict[str, Any]:
+        entry = self._get_entry(dataset_id)
+        return {"method": "spot_motives_energy", "results": self._spot_hits(entry.aspace.spot_motives_energy())}
+
+    def spot_subg_centroids(self, dataset_id: str) -> dict[str, Any]:
+        entry = self._get_entry(dataset_id)
+        return {"method": "spot_subg_centroids", "results": self._spot_hits(entry.aspace.spot_subg_centroids())}
+
+    def spot_subg_motives(self, dataset_id: str) -> dict[str, Any]:
+        entry = self._get_entry(dataset_id)
+        return {"method": "spot_subg_motives", "results": self._spot_hits(entry.aspace.spot_subg_motives())}
+
     def manifold_data(self, dataset_id: str) -> dict[str, Any]:
-        """Return manifold summary from the in-memory index.
-
-        Maps to ArrowSpace object state::
-
-            nitems, nfeatures, nclusters  — scalar attributes
-            lambdas_sorted()[:50]         — top-50 eigenvalues for topology overview
-        """
         entry = self._get_entry(dataset_id)
         lam_sorted = [[float(v), int(i)] for v, i in entry.aspace.lambdas_sorted()]
         return {
@@ -517,14 +523,6 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
         }
 
     def stats_data(self, dataset_id: str) -> dict[str, Any]:
-        """Return graph-Laplacian statistics from the in-memory index.
-
-        Maps to GraphLaplacian object state::
-
-            gl.nnodes   — number of graph nodes
-            gl.shape    — (rows, cols) of the Laplacian matrix
-            aspace.*    — dataset dimension metadata
-        """
         entry = self._get_entry(dataset_id)
         return {
             "nitems": entry.nitems,
@@ -534,24 +532,18 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
             "gl_shape": list(entry.gl.shape),
         }
 
-    # ------------------------------------------------------------------
-    # Sidecar helpers (delegate to the static sidecar reader)
-    # ------------------------------------------------------------------
-
     def sidecar_manifold(self, dataset_path: Path) -> dict[str, Any]:
         return _SidecarAdapter._read(dataset_path, "manifold.json")
 
     def sidecar_stats(self, dataset_path: Path) -> dict[str, Any]:
         return _SidecarAdapter._read(dataset_path, "stats.json")
 
-    def sidecar_search(
-        self, dataset_path: Path, q: str, *, limit: int = 20
-    ) -> list[dict[str, Any]]:
+    def sidecar_search(self, dataset_path: Path, q: str, *, limit: int = 20) -> list[dict[str, Any]]:
         return _SidecarAdapter().sidecar_search(dataset_path, q, limit=limit)
 
 
 # ---------------------------------------------------------------------------
-# Module-level factory + cache
+# Factory
 # ---------------------------------------------------------------------------
 
 
@@ -559,26 +551,26 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
 def load() -> ArrowSpaceAdapter:
     """Return the best available ArrowSpace adapter.
 
-    Priority order:
-    1. ``arrowspace`` package if importable  -> :class:`_ArrowSpaceAdapter`
-    2. Sidecar JSON files present            -> :class:`_SidecarAdapter`
+    Priority:
+    1. arrowspace package importable  -> _ArrowSpaceAdapter
+    2. fallback                       -> _SidecarAdapter
 
-    The result is cached for the process lifetime.
-    Use ``reset_adapter_cache()`` in tests to reset between cases.
+    FIX: broadened except to catch Exception (not just ImportError) because
+    the installed arrowspace package raises NameError in __init__.py when its
+    internal submodule reference fails — that is not an ImportError and was
+    previously crashing the server instead of gracefully falling back.
     """
     from .settings import get_settings
 
     try:
         import arrowspace as _mod  # type: ignore
-
         cache_size = get_settings().index_cache_size
         log.info("arrowspace package found; using live adapter (cache_size=%d)", cache_size)
         return _ArrowSpaceAdapter(_mod, cache_size=cache_size)
-    except ImportError:
-        log.info("arrowspace package not found; using sidecar adapter")
+    except Exception:  # catches ImportError AND NameError from broken __init__
+        log.info("arrowspace package not available; using sidecar adapter")
         return _SidecarAdapter()
 
 
 def reset_adapter_cache() -> None:
-    """Test / reload helper — clears the lru_cache on load()."""
     load.cache_clear()
