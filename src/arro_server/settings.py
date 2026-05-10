@@ -1,27 +1,20 @@
+"""arro-server settings.
+
+All configuration is read from environment variables with the ``ARRO_SERVER_``
+prefix (or from a ``.env`` file in the working directory).
+"""
+
 from __future__ import annotations
 
-from functools import cached_property, lru_cache
+from functools import lru_cache
 from pathlib import Path
-from typing import Annotated
+from typing import Any
 
 from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    """Runtime configuration.
-
-    Environment variables are prefixed with ``ARRO_SERVER_``.
-
-    ``data_roots`` accepts a comma-separated list, e.g.
-    ``ARRO_SERVER_DATA_ROOTS=/data/zarr,/mnt/shared/zarr``.
-    Each root may optionally be prefixed with a label: ``label=path``.
-
-    ``cors_origins`` accepts a comma-separated list of allowed origins, e.g.
-    ``ARRO_SERVER_CORS_ORIGINS=https://app.example.com,https://admin.example.com``.
-    Use ``*`` (the default) to allow all origins — do not use ``*`` in production.
-    """
-
     model_config = SettingsConfigDict(
         env_prefix="ARRO_SERVER_",
         env_file=".env",
@@ -29,67 +22,119 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    data_roots: Annotated[list[str], NoDecode] = Field(default_factory=list)
-    cors_origins: Annotated[list[str], NoDecode] = Field(default_factory=lambda: ["*"])
-    # default_window: rows returned by /data when ?limit is omitted.
-    default_window: int = 100
-    # max_window: hard cap on the number of *rows* (leading-axis elements)
-    # returned in a single /data or /slice response. Note that for N-D arrays
-    # the total element count is max_window * product(shape[1:]).
-    max_window: int = 10_000
-    serve_frontend: bool = True
-    frontend_dir: str | None = None
-    # Directory where graph-Laplacian Zarr arrays are persisted.
-    index_store: str = "./arrowspace_index"
-    # Maximum number of ArrowSpace indices to keep in memory simultaneously.
-    # Oldest entry is evicted when the limit is reached.
-    index_cache_size: int = 8
+    # ------------------------------------------------------------------
+    # Data roots  (label=path pairs, comma-separated)
+    # e.g.  ARRO_SERVER_DATA_ROOTS=main=/data/zarr,aux=/data/aux
+    # ------------------------------------------------------------------
+    data_roots: str = Field(
+        default="",
+        description="Comma-separated label=path pairs for Zarr dataset roots.",
+    )
 
-    @field_validator("data_roots", "cors_origins", mode="before")
+    # ------------------------------------------------------------------
+    # ArrowSpace index store
+    # ------------------------------------------------------------------
+    # Phase 1 name kept as alias so existing .env files keep working.
+    # Phase 2 canonical name: ARROWSPACE_INDEX_STORE
+    # Both env vars are accepted; ARROWSPACE_INDEX_STORE takes precedence.
+    arrowspace_index_store: Path = Field(
+        default=Path("./storage"),
+        description=(
+            "Writable directory for persisted ArrowSpace Parquet index files "
+            "and the index manifest. "
+            "Env var: ARRO_SERVER_ARROWSPACE_INDEX_STORE (preferred) "
+            "or ARRO_SERVER_INDEX_STORE (legacy alias)."
+        ),
+        validation_alias="arrowspace_index_store",
+    )
+
+    # Legacy alias — if the new var is not set, fall back to INDEX_STORE.
+    index_store: Path = Field(
+        default=Path("./storage"),
+        description="Legacy alias for arrowspace_index_store (ARRO_SERVER_INDEX_STORE).",
+    )
+
+    # ------------------------------------------------------------------
+    # LRU cache size for in-memory ArrowSpace objects
+    # ------------------------------------------------------------------
+    index_cache_size: int = Field(
+        default=8,
+        ge=1,
+        description="Maximum number of ArrowSpace indices to keep in memory (LRU).",
+    )
+
+    # ------------------------------------------------------------------
+    # Server
+    # ------------------------------------------------------------------
+    host: str = Field(default="0.0.0.0")
+    port: int = Field(default=8000, ge=1, le=65535)
+    reload: bool = Field(default=False)
+    log_level: str = Field(default="info")
+
+    # ------------------------------------------------------------------
+    # CORS
+    # ------------------------------------------------------------------
+    cors_origins: str = Field(
+        default="*",
+        description="Comma-separated allowed CORS origins. Use '*' for development only.",
+    )
+
+    # ------------------------------------------------------------------
+    # Features
+    # ------------------------------------------------------------------
+    serve_frontend: bool = Field(
+        default=True,
+        description="Mount the built-in Vanilla JS UI at /ui.",
+    )
+
+    max_window: int = Field(
+        default=10_000,
+        ge=1,
+        description="Hard cap on number of rows returned per data-window request.",
+    )
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    @field_validator("cors_origins", mode="before")
     @classmethod
-    def _split_csv(cls, v: object) -> object:
-        if isinstance(v, str):
-            return [s.strip() for s in v.split(",") if s.strip()]
-        return v
+    def _strip_cors(cls, v: Any) -> Any:
+        return v.strip() if isinstance(v, str) else v
 
-    @cached_property
-    def resolved_roots(self) -> dict[str, Path]:  # type: ignore[override]
-        """Return mapping of root label -> filesystem path.
+    def cors_origins_list(self) -> list[str]:
+        return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 
-        Roots may be specified as ``path`` or ``label=path``.
-        Unlabeled roots are auto-named after their directory basename, with
-        numeric suffixes on collision.
+    def parsed_data_roots(self) -> dict[str, Path]:
+        """Return {label: Path} from the DATA_ROOTS string."""
+        roots: dict[str, Path] = {}
+        for part in self.data_roots.split(","):
+            part = part.strip()
+            if not part:
+                continue
+            if "=" not in part:
+                raise ValueError(
+                    f"DATA_ROOTS entry '{part}' must be 'label=path'."
+                )
+            label, _, path = part.partition("=")
+            roots[label.strip()] = Path(path.strip())
+        return roots
 
-        Cached as a ``cached_property`` — resolved only once per Settings
-        instance, avoiding repeated ``Path.resolve()`` syscalls per request.
-        """
-        out: dict[str, Path] = {}
-        for entry in self.data_roots:
-            if "=" in entry:
-                label, raw = entry.split("=", 1)
-                label = label.strip()
-            else:
-                raw = entry
-                label = Path(raw).name or "root"
-            path = Path(raw).expanduser().resolve()
-            base = label
-            i = 1
-            while label in out:
-                i += 1
-                label = f"{base}-{i}"
-            out[label] = path
-        return out
+    def effective_index_store(self) -> Path:
+        """Return arrowspace_index_store, falling back to index_store (legacy)."""
+        # If the user set the canonical var it will differ from the default;
+        # otherwise we honour the legacy var.
+        default = Path("./storage")
+        if self.arrowspace_index_store != default:
+            return self.arrowspace_index_store
+        return self.index_store
 
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
-    """Return the process-wide Settings singleton.
-
-    Use ``get_settings.cache_clear()`` in tests to reset between cases.
-    """
     return Settings()
 
 
 def reset_settings_cache() -> None:
-    """Test / reload helper — clears the lru_cache on get_settings."""
-    get_settings.cache_clear()
+    if hasattr(get_settings, "cache_clear"):
+        get_settings.cache_clear()

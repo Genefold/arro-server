@@ -1,26 +1,36 @@
-# Works with both `docker compose` and `podman-compose`.
-# Override DATA_DIR on the host to expose your Zarr roots.
-#
-# WARNING: ARRO_SERVER_CORS_ORIGINS is set to "*" here for local development
-# convenience. Do NOT use "*" in production — set it to your actual origin(s).
-
 services:
   arro-server:
     build:
       context: .
       dockerfile: Containerfile
-      args:
-        INSTALL_ARROW: "0"
-        INSTALL_ARROWSPACE: "0"
-    image: arro-server:dev
-    container_name: arro-server
     ports:
       - "8000:8000"
     environment:
-      ARRO_SERVER_DATA_ROOTS: "main=/data"
+      ARRO_SERVER_DATA_ROOTS: "main=/data/zarr"
+      ARRO_SERVER_ARROWSPACE_INDEX_STORE: "/index-store"
+      ARRO_SERVER_INDEX_CACHE_SIZE: "8"
       ARRO_SERVER_CORS_ORIGINS: "*"
-      ARRO_SERVER_DEFAULT_WINDOW: "100"
+      ARRO_SERVER_LOG_LEVEL: "info"
+      ARRO_SERVER_SERVE_FRONTEND: "true"
     volumes:
-      # Override on the CLI: DATA_DIR=/path/to/zarr docker compose up
-      - "${DATA_DIR:-./example_data}:/data:ro,Z"
+      # Zarr dataset root — mount your data here
+      - zarr_data:/data/zarr
+      # ArrowSpace index store — persisted across container restarts
+      - arrow_index_store:/index-store
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  zarr_data:
+    driver: local
+  # Dedicated volume for ArrowSpace Parquet index files and index_manifest.json.
+  # Survives container restarts and upgrades — indices are never recomputed
+  # unless you explicitly POST /api/datasets/{id}/index or
+  # DELETE /api/datasets/{id}/index.
+  arrow_index_store:
+    driver: local

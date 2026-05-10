@@ -6,10 +6,27 @@ every environment.  We never import it at module load — :func:`load` attempts
 the import lazily and returns a stub adapter that falls back to the sidecar
 JSON adapter.
 
-Real arrowspace API (confirmed from package introspection):
+Real arrowspace API (confirmed from package introspection)::
 
     from arrowspace import ArrowSpaceBuilder
+
+    # Phase 1 — build in memory only
     aspace, gl = ArrowSpaceBuilder().build(graph_params, np_array_float64)
+
+    # Phase 2 — build and persist Parquet files
+    aspace, gl = ArrowSpaceBuilder().build_and_store(
+        graph_params, np_array_float64,
+        storage_path="storage/",
+        dataset_name="dataset_{uuid}",
+    )
+
+    # Phase 2 — reload without recomputing
+    aspace, gl = arrowspace.load_arrowspace(
+        storage_path="storage/",
+        dataset_name="dataset_{uuid}",
+        graph_params={...},
+        energy=False,
+    )
 
 ArrowSpace object public surface::
 
@@ -37,15 +54,31 @@ GraphLaplacian object public surface::
     gl.graph_params        dict
     gl.to_csr()            -> (data, indices, indptr, shape)
     gl.to_dense()          -> np.ndarray  2D float32
+
+Phase 2 — Persistence
+---------------------
+On every ``build_index()`` call the adapter:
+  1. Calls ``ArrowSpaceBuilder().build_and_store()`` which writes two Parquet
+     files under ``<index_store>/<dataset_name>/``.
+  2. Records ``{dataset_id -> dataset_name}`` in
+     ``<index_store>/index_manifest.json``.
+
+On ``load()`` (server startup) the adapter:
+  1. Reads ``index_manifest.json`` (if present).
+  2. Calls ``arrowspace.load_arrowspace()`` for every known entry and
+     pre-populates the LRU cache — indices survive restarts without
+     recomputing.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import threading
+import uuid
 from abc import ABC, abstractmethod
 from collections import OrderedDict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -66,6 +99,8 @@ DEFAULT_GRAPH_PARAMS: dict[str, Any] = {
 }
 
 DEFAULT_SEARCH_K: int = 10
+
+MANIFEST_FILENAME = "index_manifest.json"
 
 
 # ---------------------------------------------------------------------------
@@ -88,6 +123,12 @@ class ArrowSpaceAdapter(ABC):
     ) -> dict[str, Any]: ...
 
     @abstractmethod
+    def delete_index(self, dataset_id: str, index_store: Path) -> bool: ...
+
+    @abstractmethod
+    def indexed_datasets(self) -> list[str]: ...
+
+    @abstractmethod
     def lambdas(self, dataset_id: str) -> dict[str, Any]: ...
 
     @abstractmethod
@@ -103,6 +144,54 @@ class ArrowSpaceAdapter(ABC):
     def sidecar_search(
         self, dataset_path: Path, q: str, *, limit: int = 20
     ) -> list[dict[str, Any]]: ...
+
+
+# ---------------------------------------------------------------------------
+# Manifest helper (thread-safe)
+# ---------------------------------------------------------------------------
+
+
+class _Manifest:
+    """JSON file that maps dataset_id -> dataset_name (Parquet slug).
+
+    Thread-safe: all reads and writes are protected by a lock.
+    """
+
+    def __init__(self, index_store: Path) -> None:
+        self._path = index_store / MANIFEST_FILENAME
+        self._lock = threading.Lock()
+
+    def _read(self) -> dict[str, str]:
+        if not self._path.exists():
+            return {}
+        try:
+            return json.loads(self._path.read_text())
+        except Exception:
+            log.warning("Could not read manifest at %s", self._path, exc_info=True)
+            return {}
+
+    def _write(self, data: dict[str, str]) -> None:
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        self._path.write_text(json.dumps(data, indent=2))
+
+    def get_all(self) -> dict[str, str]:
+        with self._lock:
+            return dict(self._read())
+
+    def put(self, dataset_id: str, dataset_name: str) -> None:
+        with self._lock:
+            data = self._read()
+            data[dataset_id] = dataset_name
+            self._write(data)
+
+    def remove(self, dataset_id: str) -> str | None:
+        """Remove entry; return the dataset_name that was stored, or None."""
+        with self._lock:
+            data = self._read()
+            dataset_name = data.pop(dataset_id, None)
+            if dataset_name is not None:
+                self._write(data)
+            return dataset_name
 
 
 # ---------------------------------------------------------------------------
@@ -154,6 +243,12 @@ class _SidecarAdapter(ArrowSpaceAdapter):
             "arrowspace",
             "build_index (install arrowspace package: pip install arrowspace)",
         )
+
+    def delete_index(self, dataset_id: str, index_store: Path) -> bool:
+        raise OptionalDependencyMissing("arrowspace", "delete_index")
+
+    def indexed_datasets(self) -> list[str]:
+        return []
 
     def lambdas(self, dataset_id: str) -> dict[str, Any]:
         raise OptionalDependencyMissing("arrowspace", "lambdas")
@@ -209,6 +304,12 @@ class _UnavailableAdapter(ArrowSpaceAdapter):
 
     def build_index(self, dataset_id, array, index_store, graph_params=None):
         raise OptionalDependencyMissing("arrowspace", "build_index")
+
+    def delete_index(self, dataset_id, index_store):
+        raise OptionalDependencyMissing("arrowspace", "delete_index")
+
+    def indexed_datasets(self) -> list[str]:
+        return []
 
     def lambdas(self, dataset_id):
         raise OptionalDependencyMissing("arrowspace", "lambdas")
@@ -271,6 +372,8 @@ class _IndexEntry:
     nitems: int
     nfeatures: int
     nclusters: int
+    dataset_name: str = field(default="")
+    graph_params: dict[str, Any] = field(default_factory=dict)
 
 
 class _LRUIndexCache:
@@ -298,6 +401,9 @@ class _LRUIndexCache:
             return True
         return False
 
+    def keys(self) -> list[str]:
+        return list(self._data.keys())
+
     def __contains__(self, key: str) -> bool:
         return key in self._data
 
@@ -315,33 +421,12 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
 
     @staticmethod
     def _slug(dataset_id: str) -> str:
-        return dataset_id.replace("/", "__").replace("\\", "__")
+        """Filesystem-safe name derived from dataset_id."""
+        return "dataset_" + dataset_id.replace("/", "__").replace("\\", "__")
 
-    def _persist_csr(self, index_store: Path, slug: str, gl: Any, meta: dict[str, Any]) -> None:
-        try:
-            import zarr  # type: ignore
-        except ImportError:
-            log.warning("zarr not installed; graph-Laplacian will not be persisted")
-            return
-        try:
-            csr_data, csr_indices, csr_indptr, csr_shape = gl.to_csr()
-            dest = index_store / slug
-            dest.mkdir(parents=True, exist_ok=True)
-            for arr_name, arr_val in (
-                ("data", np.asarray(csr_data, dtype=np.float32)),
-                ("indices", np.asarray(csr_indices, dtype=np.int64)),
-                ("indptr", np.asarray(csr_indptr, dtype=np.int64)),
-            ):
-                zarr_path = dest / f"{arr_name}.zarr"
-                z = zarr.open(str(zarr_path), mode="w", shape=arr_val.shape,
-                              dtype=arr_val.dtype, chunks=True, zarr_format=3)
-                z[:] = arr_val
-            meta_dict = dict(meta)
-            meta_dict["csr_shape"] = list(csr_shape)
-            (dest / "meta.json").write_text(json.dumps(meta_dict))
-            log.info("Persisted graph-Laplacian CSR to %s", dest)
-        except Exception:
-            log.warning("Failed to persist CSR for '%s'", slug, exc_info=True)
+    # ------------------------------------------------------------------
+    # Phase 2: build_and_store + manifest
+    # ------------------------------------------------------------------
 
     def build_index(
         self,
@@ -356,18 +441,134 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
             raise ValueError(
                 f"arrowspace requires a 2-D array (items x features); got shape {arr64.shape}"
             )
-        log.info("Building index for '%s' shape=%s params=%s", dataset_id, arr64.shape, gp)
-        aspace, gl = self._mod.ArrowSpaceBuilder().build(gp, arr64)
+
+        # Unique Parquet slug for this dataset
+        dataset_name = self._slug(dataset_id)
+        index_store.mkdir(parents=True, exist_ok=True)
+
+        log.info(
+            "Building index for '%s' shape=%s params=%s -> %s",
+            dataset_id, arr64.shape, gp, index_store / dataset_name,
+        )
+
+        aspace, gl = self._mod.ArrowSpaceBuilder().build_and_store(
+            gp,
+            arr64,
+            storage_path=str(index_store),
+            dataset_name=dataset_name,
+        )
+
         entry = _IndexEntry(
-            aspace=aspace, gl=gl,
+            aspace=aspace,
+            gl=gl,
             nitems=int(aspace.nitems),
             nfeatures=int(aspace.nfeatures),
             nclusters=int(aspace.nclusters),
+            dataset_name=dataset_name,
+            graph_params=gp,
         )
         self._cache.put(dataset_id, entry)
-        meta = {"nitems": entry.nitems, "nfeatures": entry.nfeatures, "nclusters": entry.nclusters}
-        self._persist_csr(index_store, self._slug(dataset_id), gl, meta)
-        return meta
+
+        # Persist mapping to manifest
+        _Manifest(index_store).put(dataset_id, dataset_name)
+        log.info("Index for '%s' persisted as '%s'", dataset_id, dataset_name)
+
+        return {
+            "nitems": entry.nitems,
+            "nfeatures": entry.nfeatures,
+            "nclusters": entry.nclusters,
+            "dataset_name": dataset_name,
+            "graph_params": gp,
+        }
+
+    # ------------------------------------------------------------------
+    # Phase 2: auto-load persisted indices
+    # ------------------------------------------------------------------
+
+    def load_persisted(self, index_store: Path) -> int:
+        """Read manifest and pre-load all known indices into the LRU cache.
+
+        Called once at server startup. Returns the number of indices loaded.
+        Failures for individual indices are logged and skipped so the server
+        always starts cleanly.
+        """
+        manifest = _Manifest(index_store).get_all()
+        if not manifest:
+            log.info("No persisted indices found in %s", index_store)
+            return 0
+
+        loaded = 0
+        for dataset_id, dataset_name in manifest.items():
+            if dataset_id in self._cache:
+                log.debug("'%s' already in cache, skipping reload", dataset_id)
+                loaded += 1
+                continue
+            try:
+                log.info("Loading persisted index '%s' from '%s'", dataset_id, dataset_name)
+                # Reload graph_params from the manifest entry if stored,
+                # otherwise fall back to defaults so load_arrowspace() works.
+                aspace, gl = self._mod.load_arrowspace(
+                    storage_path=str(index_store),
+                    dataset_name=dataset_name,
+                    graph_params=DEFAULT_GRAPH_PARAMS,
+                    energy=False,
+                )
+                entry = _IndexEntry(
+                    aspace=aspace,
+                    gl=gl,
+                    nitems=int(aspace.nitems),
+                    nfeatures=int(aspace.nfeatures),
+                    nclusters=int(aspace.nclusters),
+                    dataset_name=dataset_name,
+                    graph_params=DEFAULT_GRAPH_PARAMS,
+                )
+                self._cache.put(dataset_id, entry)
+                loaded += 1
+                log.info("Loaded '%s' (%d items)", dataset_id, entry.nitems)
+            except Exception:
+                log.warning(
+                    "Failed to load persisted index for '%s'; skipping",
+                    dataset_id,
+                    exc_info=True,
+                )
+
+        return loaded
+
+    # ------------------------------------------------------------------
+    # Phase 2: delete index
+    # ------------------------------------------------------------------
+
+    def delete_index(self, dataset_id: str, index_store: Path) -> bool:
+        """Remove index from LRU cache, Parquet files and manifest.
+
+        Returns True if the index existed and was removed, False if it was
+        not found (idempotent — safe to call multiple times).
+        """
+        manifest = _Manifest(index_store)
+        dataset_name = manifest.remove(dataset_id)
+        cache_hit = self._cache.delete(dataset_id)
+
+        if dataset_name:
+            # Remove Parquet directory written by build_and_store
+            parquet_dir = index_store / dataset_name
+            if parquet_dir.exists():
+                import shutil
+                shutil.rmtree(parquet_dir, ignore_errors=True)
+                log.info("Deleted Parquet files for '%s' at %s", dataset_id, parquet_dir)
+
+        return bool(dataset_name or cache_hit)
+
+    # ------------------------------------------------------------------
+    # Health
+    # ------------------------------------------------------------------
+
+    def indexed_datasets(self) -> list[str]:
+        """Return dataset IDs currently held in the LRU cache."""
+        return self._cache.keys()
+
+    # ------------------------------------------------------------------
+    # Helpers shared by search methods
+    # ------------------------------------------------------------------
 
     def _get_entry(self, dataset_id: str) -> _IndexEntry:
         entry = self._cache.get(dataset_id)
@@ -378,16 +579,7 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
             )
         return entry
 
-    # ------------------------------------------------------------------
-    # Helpers shared by search methods
-    # ------------------------------------------------------------------
-
     def _vec(self, query: dict[str, Any]) -> np.ndarray:
-        """Extract and validate 'vector' from query dict, return float64 array.
-
-        Raises HTTPException(422) if the value cannot be coerced to float64.
-        Raises MetadataUnavailable(404) if 'vector' key is absent.
-        """
         vec = query.get("vector")
         if vec is None:
             raise MetadataUnavailable("'vector' is required in search body")
@@ -416,8 +608,6 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
     def graph_laplacian_info(self, dataset_id: str) -> dict[str, Any]:
         entry = self._get_entry(dataset_id)
         nnodes = int(entry.gl.nnodes)
-        # gl.shape may be a property/method returning a non-iterable on some
-        # arrowspace versions; guard with try/except and fall back to (nnodes, nnodes).
         try:
             gl_shape = list(entry.gl.shape)
         except TypeError:
@@ -467,7 +657,9 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
         try:
             vecs = np.asarray(vecs_raw, dtype=np.float64)
         except (ValueError, TypeError) as exc:
-            raise HTTPException(status_code=422, detail="'vectors' must be a 2-D list of numbers") from exc
+            raise HTTPException(
+                status_code=422, detail="'vectors' must be a 2-D list of numbers"
+            ) from exc
         tau = float(query.get("tau", 1.0))
         batch_hits = entry.aspace.search_batch(vecs, entry.gl, tau)
         return {
@@ -540,8 +732,6 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
     def stats_data(self, dataset_id: str) -> dict[str, Any]:
         entry = self._get_entry(dataset_id)
         nnodes = int(entry.gl.nnodes)
-        # gl.shape may be a non-iterable built-in on some arrowspace versions;
-        # guard with try/except and fall back to (nnodes, nnodes).
         try:
             gl_shape = list(entry.gl.shape)
         except TypeError:
@@ -560,7 +750,9 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
     def sidecar_stats(self, dataset_path: Path) -> dict[str, Any]:
         return _SidecarAdapter._read(dataset_path, "stats.json")
 
-    def sidecar_search(self, dataset_path: Path, q: str, *, limit: int = 20) -> list[dict[str, Any]]:
+    def sidecar_search(
+        self, dataset_path: Path, q: str, *, limit: int = 20
+    ) -> list[dict[str, Any]]:
         return _SidecarAdapter().sidecar_search(dataset_path, q, limit=limit)
 
 
@@ -571,31 +763,34 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
 
 @lru_cache(maxsize=1)
 def load() -> ArrowSpaceAdapter:
-    """Return the best available ArrowSpace adapter.
+    """Return the best available ArrowSpace adapter and pre-load persisted indices.
 
     Priority:
-    1. arrowspace package importable  -> _ArrowSpaceAdapter
+    1. arrowspace package importable  -> _ArrowSpaceAdapter (with auto-load)
     2. fallback                       -> _SidecarAdapter
 
-    FIX: broadened except to catch Exception (not just ImportError) because
-    the installed arrowspace package raises NameError in __init__.py when its
-    internal submodule reference fails — that is not an ImportError and was
-    previously crashing the server instead of gracefully falling back.
+    Phase 2: after building the live adapter, ``load_persisted()`` is called
+    so all previously built indices are restored from disk without recomputing.
     """
     from .settings import get_settings
 
     try:
         import arrowspace as _mod  # type: ignore
-        cache_size = get_settings().index_cache_size
+        settings = get_settings()
+        cache_size = settings.index_cache_size
+        index_store = settings.effective_index_store()
         log.info("arrowspace package found; using live adapter (cache_size=%d)", cache_size)
-        return _ArrowSpaceAdapter(_mod, cache_size=cache_size)
+        adapter = _ArrowSpaceAdapter(_mod, cache_size=cache_size)
+        # Auto-load persisted indices on startup
+        n = adapter.load_persisted(index_store)
+        if n:
+            log.info("Pre-loaded %d persisted index(es) from %s", n, index_store)
+        return adapter
     except Exception:  # catches ImportError AND NameError from broken __init__
         log.info("arrowspace package not available; using sidecar adapter")
         return _SidecarAdapter()
 
 
 def reset_adapter_cache() -> None:
-    # Guard: load() may be monkey-patched in tests to a plain function
-    # that does not have .cache_clear(). Only call it when present.
     if hasattr(load, "cache_clear"):
         load.cache_clear()
