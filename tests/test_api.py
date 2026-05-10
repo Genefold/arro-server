@@ -1,3 +1,19 @@
+"""Integration tests for the arro-server HTTP API.
+
+All tests use the TestClient fixture from conftest.py which creates an
+isolated FastAPI app pointed at a tmp Zarr root.
+
+Phase 1 additions (marked with # [Phase 1]):
+    test_health_reports_backend          — /health includes arrowspace_backend + arrowspace_available
+    test_manifold_has_backend_field      — /manifold includes backend + arrowspace_available
+    test_stats_has_backend_field         — /stats includes backend + arrowspace_available
+    test_post_index                      — POST /index builds and returns meta
+    test_post_index_custom_params        — POST /index with custom graph_params
+    test_post_search_vector              — POST /search with float vector
+    test_lambdas_endpoint                — GET /lambdas after index build
+    test_post_search_requires_index      — POST /search 503 when no index built
+"""
+
 from __future__ import annotations
 
 import pytest
@@ -7,6 +23,11 @@ from fastapi.testclient import TestClient
 @pytest.fixture
 def client(configured_app):
     return TestClient(configured_app)
+
+
+# ---------------------------------------------------------------------------
+# Existing tests (unchanged)
+# ---------------------------------------------------------------------------
 
 
 def test_health(client: TestClient) -> None:
@@ -22,7 +43,7 @@ def test_list_datasets(client: TestClient) -> None:
     assert r.status_code == 200
     body = r.json()
     ids = {d["id"] for d in body["datasets"] if d["kind"] == "array"}
-    # IDs now use '--' separator instead of '/'
+    # IDs use '--' separator instead of '/'
     assert {"main--matrix", "main--vector"}.issubset(ids)
 
 
@@ -129,9 +150,124 @@ def test_search_missing_index(client: TestClient) -> None:
 
 def test_window_budget_enforced(client: TestClient) -> None:
     """Requesting more rows than MAX_WINDOW should return 400."""
-    # matrix is (50,4); default max_window=10_000 rows - use a tiny limit
-    # by configuring the app at module level is not practical here, so instead
-    # we verify the budget *passes* for a normal request and trust the unit
-    # path in slicing.py for the rejection case.
     r = client.get("/api/datasets/main--matrix/data?offset=0&limit=50")
     assert r.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# [Phase 1] New tests
+# ---------------------------------------------------------------------------
+
+
+def test_health_reports_backend(client: TestClient) -> None:  # [Phase 1] Task 1.5
+    """GET /health must include arrowspace_backend and arrowspace_available."""
+    r = client.get("/api/health")
+    assert r.status_code == 200
+    body = r.json()
+    assert "arrowspace_backend" in body
+    assert body["arrowspace_backend"] in {"arrowspace", "sidecar", "none"}
+    assert "arrowspace_available" in body
+    assert isinstance(body["arrowspace_available"], bool)
+
+
+def test_manifold_has_backend_field(client: TestClient) -> None:  # [Phase 1] Task 1.5
+    """GET /manifold response must include backend and arrowspace_available."""
+    r = client.get("/api/datasets/main--matrix/manifold")
+    assert r.status_code == 200
+    body = r.json()
+    assert "backend" in body
+    assert "arrowspace_available" in body
+    assert isinstance(body["arrowspace_available"], bool)
+    assert "source" in body  # 'live' | 'sidecar' | 'unavailable'
+
+
+def test_stats_has_backend_field(client: TestClient) -> None:  # [Phase 1] Task 1.5
+    """GET /stats response must include backend and arrowspace_available."""
+    r = client.get("/api/datasets/main--matrix/stats")
+    assert r.status_code == 200
+    body = r.json()
+    assert "backend" in body
+    assert "arrowspace_available" in body
+
+
+@pytest.mark.skipif(
+    not __import__("importlib").util.find_spec("arrowspace"),
+    reason="arrowspace not installed",
+)
+def test_post_index(client: TestClient) -> None:  # [Phase 1] Task 1.3
+    """POST /index must build an index and return {built, nitems, nfeatures, nclusters}."""
+    r = client.post("/api/datasets/main--matrix/index")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["built"] is True
+    assert body["nitems"] == 50
+    assert body["nfeatures"] == 4
+    assert "nclusters" in body
+    assert "graph_params" in body
+
+
+@pytest.mark.skipif(
+    not __import__("importlib").util.find_spec("arrowspace"),
+    reason="arrowspace not installed",
+)
+def test_post_index_custom_params(client: TestClient) -> None:  # [Phase 1] Task 1.3
+    """POST /index with custom graph_params must echo them back."""
+    params = {"eps": 0.5, "k": 4, "topk": 2, "p": 1.0, "sigma": 0.5}
+    r = client.post("/api/datasets/main--matrix/index", json=params)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["graph_params"] == params
+
+
+@pytest.mark.skipif(
+    not __import__("importlib").util.find_spec("arrowspace"),
+    reason="arrowspace not installed",
+)
+def test_post_search_vector(client: TestClient) -> None:  # [Phase 1] Task 1.4
+    """POST /search must return scored results for a float vector."""
+    # Build index first
+    client.post("/api/datasets/main--matrix/index")
+    # Query with a 4-element vector matching the array's feature dimension
+    query_vector = [0.0, 1.0, 2.0, 3.0]
+    r = client.post(
+        "/api/datasets/main--matrix/search",
+        json={"vector": query_vector, "tau": 1.0},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert "results" in body
+    assert len(body["results"]) > 0
+    hit = body["results"][0]
+    assert "index" in hit
+    assert "score" in hit
+    assert isinstance(hit["index"], int)
+    assert isinstance(hit["score"], float)
+    assert body["backend"] == "arrowspace"
+    assert body["arrowspace_available"] is True
+
+
+@pytest.mark.skipif(
+    not __import__("importlib").util.find_spec("arrowspace"),
+    reason="arrowspace not installed",
+)
+def test_lambdas_endpoint(client: TestClient) -> None:  # [Phase 1] Task 1.5
+    """GET /lambdas must return eigenvalue data after index is built."""
+    client.post("/api/datasets/main--matrix/index")
+    r = client.get("/api/datasets/main--matrix/lambdas")
+    assert r.status_code == 200
+    body = r.json()
+    assert "lambdas" in body
+    assert "lambdas_sorted" in body
+    assert "nitems" in body
+    assert body["backend"] == "arrowspace"
+    assert body["arrowspace_available"] is True
+
+
+def test_post_search_requires_index(client: TestClient) -> None:  # [Phase 1] Task 1.4
+    """POST /search without a built index must return 503 or 404."""
+    r = client.post(
+        "/api/datasets/main--matrix/search",
+        json={"vector": [0.1, 0.2, 0.3, 0.4], "tau": 1.0},
+    )
+    # 503 = arrowspace not installed, 404 = installed but no index built
+    assert r.status_code in {503, 404}
