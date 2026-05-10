@@ -69,6 +69,7 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
 import threading
 from abc import ABC, abstractmethod
 from collections import OrderedDict
@@ -138,6 +139,47 @@ class ArrowSpaceAdapter(ABC):
     def sidecar_search(
         self, dataset_path: Path, q: str, *, limit: int = 20
     ) -> list[dict[str, Any]]: ...
+
+    # These are implemented only in _ArrowSpaceAdapter but declared here
+    # so routes can call them via isinstance check.
+    def manifold_data(self, dataset_id: str) -> dict[str, Any]:  # type: ignore[return]
+        raise NotImplementedError
+
+    def stats_data(self, dataset_id: str) -> dict[str, Any]:  # type: ignore[return]
+        raise NotImplementedError
+
+    def graph_laplacian_info(self, dataset_id: str) -> dict[str, Any]:  # type: ignore[return]
+        raise NotImplementedError
+
+    def get_item(self, dataset_id: str, idx: int) -> dict[str, Any]:  # type: ignore[return]
+        raise NotImplementedError
+
+    def get_all_items(self, dataset_id: str) -> dict[str, Any]:  # type: ignore[return]
+        raise NotImplementedError
+
+    def search_batch(self, dataset_id: str, query: dict[str, Any]) -> dict[str, Any]:  # type: ignore[return]
+        raise NotImplementedError
+
+    def search_energy(self, dataset_id: str, query: dict[str, Any]) -> dict[str, Any]:  # type: ignore[return]
+        raise NotImplementedError
+
+    def search_hybrid(self, dataset_id: str, query: dict[str, Any]) -> dict[str, Any]:  # type: ignore[return]
+        raise NotImplementedError
+
+    def search_linear_sorted(self, dataset_id: str, query: dict[str, Any]) -> dict[str, Any]:  # type: ignore[return]
+        raise NotImplementedError
+
+    def spot_motives_eigen(self, dataset_id: str) -> dict[str, Any]:  # type: ignore[return]
+        raise NotImplementedError
+
+    def spot_motives_energy(self, dataset_id: str) -> dict[str, Any]:  # type: ignore[return]
+        raise NotImplementedError
+
+    def spot_subg_centroids(self, dataset_id: str) -> dict[str, Any]:  # type: ignore[return]
+        raise NotImplementedError
+
+    def spot_subg_motives(self, dataset_id: str) -> dict[str, Any]:  # type: ignore[return]
+        raise NotImplementedError
 
 
 # ---------------------------------------------------------------------------
@@ -417,8 +459,31 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
 
     @staticmethod
     def _slug(dataset_id: str) -> str:
-        """Filesystem-safe slug derived from dataset_id."""
-        return "dataset_" + dataset_id.replace("/", "__").replace("\\", "__")
+        """Filesystem-safe slug derived from dataset_id (no prefix)."""
+        return dataset_id.replace("/", "__").replace("\\", "__")
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _get_entry(self, dataset_id: str) -> _IndexEntry:
+        entry = self._cache.get(dataset_id)
+        if entry is None:
+            raise MetadataUnavailable(
+                f"No ArrowSpace index in cache for '{dataset_id}'. "
+                "Call POST /index first."
+            )
+        return entry
+
+    def _hits_to_results(self, hits: Any) -> list[dict[str, Any]]:
+        """Normalise a list of (index, score) tuples to dicts."""
+        results = []
+        for item in hits:
+            if isinstance(item, (list, tuple)) and len(item) == 2:
+                results.append({"index": int(item[0]), "score": float(item[1])})
+            else:
+                results.append({"index": int(item), "score": 0.0})
+        return results
 
     # ------------------------------------------------------------------
     # Persist GraphLaplacian as Zarr v3 CSR arrays
@@ -448,13 +513,13 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
                 z[:] = arr_val
             meta_dict = dict(meta)
             meta_dict["csr_shape"] = list(csr_shape)
-            (dest / "meta.json").write_text(json.dumps(meta_dict))
-            log.info("Persisted graph-Laplacian CSR to %s", dest)
+            (dest / "meta.json").write_text(json.dumps(meta_dict, indent=2))
+            log.info("Persisted CSR GraphLaplacian to %s", dest)
         except Exception:
-            log.warning("Failed to persist CSR for '%s'", slug, exc_info=True)
+            log.warning("Failed to persist CSR arrays for slug '%s'", slug, exc_info=True)
 
     # ------------------------------------------------------------------
-    # build_index
+    # Build / delete index
     # ------------------------------------------------------------------
 
     def build_index(
@@ -464,24 +529,21 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
         index_store: Path,
         graph_params: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        gp = graph_params or DEFAULT_GRAPH_PARAMS
-        arr64 = np.asarray(array, dtype=np.float64)
-        if arr64.ndim != 2:
+        if array.ndim != 2:
             raise ValueError(
-                f"arrowspace requires a 2-D array (items x features); got shape {arr64.shape}"
+                f"ArrowSpace requires a 2-D array; got shape {array.shape}. "
+                "Please pass a 2-D (rows x features) float64 array."
             )
-
-        slug = self._slug(dataset_id)
-        index_store.mkdir(parents=True, exist_ok=True)
-
-        log.info(
-            "Building index for '%s' shape=%s params=%s",
-            dataset_id, arr64.shape, gp,
-        )
-
-        # build_and_store returns a 2-tuple (ArrowSpace, GraphLaplacian)
+        gp = dict(graph_params or DEFAULT_GRAPH_PARAMS)
+        arr64 = array.astype(np.float64)
+        # Phase 2 contract: build_and_store(graph_params, array) -> (aspace, gl)
         aspace, gl = self._mod.ArrowSpaceBuilder().build_and_store(gp, arr64)
-
+        slug = self._slug(dataset_id)
+        meta: dict[str, Any] = {
+            "nitems": int(aspace.nitems),
+            "nfeatures": int(aspace.nfeatures),
+            "nclusters": int(aspace.nclusters),
+        }
         entry = _IndexEntry(
             aspace=aspace,
             gl=gl,
@@ -492,47 +554,42 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
             graph_params=gp,
         )
         self._cache.put(dataset_id, entry)
-
-        meta = {
-            "nitems": entry.nitems,
-            "nfeatures": entry.nfeatures,
-            "nclusters": entry.nclusters,
-        }
-        # Persist CSR Zarr arrays and update manifest
         self._persist_csr(index_store, slug, gl, meta)
         _Manifest(index_store).put(dataset_id, slug)
-        log.info("Index for '%s' persisted as '%s'", dataset_id, slug)
+        return meta
 
-        return {**meta, "slug": slug, "graph_params": gp}
+    def delete_index(self, dataset_id: str, index_store: Path) -> bool:
+        in_cache = self._cache.delete(dataset_id)
+        slug = _Manifest(index_store).remove(dataset_id)
+        if slug:
+            dest = index_store / slug
+            if dest.exists():
+                shutil.rmtree(dest, ignore_errors=True)
+                log.info("Deleted CSR directory %s", dest)
+        return in_cache or bool(slug)
+
+    def indexed_datasets(self) -> list[str]:
+        return self._cache.keys()
 
     # ------------------------------------------------------------------
-    # Auto-load persisted indices at startup
+    # Load persisted indices on startup
     # ------------------------------------------------------------------
 
-    def load_persisted(self, index_store: Path) -> int:
-        """Read manifest and pre-load all known indices into the LRU cache.
-
-        Called once at server startup. Returns the number of indices loaded.
-        Failures for individual indices are logged and skipped.
-        """
+    def load_persisted(self, index_store: Path) -> None:
+        """Reload indices from disk into the LRU cache (called at startup)."""
         manifest = _Manifest(index_store).get_all()
-        if not manifest:
-            log.info("No persisted indices found in %s", index_store)
-            return 0
-
-        loaded = 0
         for dataset_id, slug in manifest.items():
-            if dataset_id in self._cache:
-                log.debug("'%s' already in cache, skipping reload", dataset_id)
-                loaded += 1
+            dest = index_store / slug
+            meta_file = dest / "meta.json"
+            if not meta_file.exists():
+                log.warning("Missing meta.json for '%s' at %s — skipping", dataset_id, dest)
                 continue
             try:
-                log.info("Loading persisted index '%s' from slug '%s'", dataset_id, slug)
-                # load_arrowspace also returns a 2-tuple (ArrowSpace, GraphLaplacian)
+                meta = json.loads(meta_file.read_text())
                 aspace, gl = self._mod.load_arrowspace(
                     storage_path=str(index_store),
                     dataset_name=slug,
-                    graph_params=DEFAULT_GRAPH_PARAMS,
+                    graph_params=meta.get("graph_params", DEFAULT_GRAPH_PARAMS),
                     energy=False,
                 )
                 entry = _IndexEntry(
@@ -542,266 +599,212 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
                     nfeatures=int(aspace.nfeatures),
                     nclusters=int(aspace.nclusters),
                     slug=slug,
-                    graph_params=DEFAULT_GRAPH_PARAMS,
+                    graph_params=meta.get("graph_params", {}),
                 )
                 self._cache.put(dataset_id, entry)
-                loaded += 1
-                log.info("Loaded '%s' (%d items)", dataset_id, entry.nitems)
+                log.info("Reloaded ArrowSpace index for '%s' from %s", dataset_id, dest)
             except Exception:
                 log.warning(
-                    "Failed to load persisted index for '%s'; skipping",
-                    dataset_id,
-                    exc_info=True,
+                    "Failed to reload index for '%s' from %s", dataset_id, dest, exc_info=True
                 )
 
-        return loaded
-
     # ------------------------------------------------------------------
-    # Delete index
-    # ------------------------------------------------------------------
-
-    def delete_index(self, dataset_id: str, index_store: Path) -> bool:
-        manifest = _Manifest(index_store)
-        slug = manifest.remove(dataset_id)
-        cache_hit = self._cache.delete(dataset_id)
-
-        if slug:
-            csr_dir = index_store / slug
-            if csr_dir.exists():
-                import shutil
-                shutil.rmtree(csr_dir, ignore_errors=True)
-                log.info("Deleted CSR Zarr files for '%s' at %s", dataset_id, csr_dir)
-
-        return bool(slug or cache_hit)
-
-    # ------------------------------------------------------------------
-    # Health / introspection
-    # ------------------------------------------------------------------
-
-    def indexed_datasets(self) -> list[str]:
-        return self._cache.keys()
-
-    # ------------------------------------------------------------------
-    # Shared helpers
-    # ------------------------------------------------------------------
-
-    def _get_entry(self, dataset_id: str) -> _IndexEntry:
-        entry = self._cache.get(dataset_id)
-        if entry is None:
-            raise MetadataUnavailable(
-                f"No index built for '{dataset_id}'. "
-                "Call POST /api/datasets/{id}/index first."
-            )
-        return entry
-
-    def _vec(self, query: dict[str, Any]) -> np.ndarray:
-        vec = query.get("vector")
-        if vec is None:
-            raise MetadataUnavailable("'vector' is required in search body")
-        try:
-            return np.asarray(vec, dtype=np.float64)
-        except (ValueError, TypeError) as exc:
-            raise HTTPException(
-                status_code=422,
-                detail=f"'vector' must be a list of numbers; got: {type(vec).__name__}",
-            ) from exc
-
-    # ------------------------------------------------------------------
-    # Query methods
+    # Lambdas
     # ------------------------------------------------------------------
 
     def lambdas(self, dataset_id: str) -> dict[str, Any]:
         entry = self._get_entry(dataset_id)
-        lam = list(entry.aspace.lambdas())
-        lam_sorted = [[float(v), int(i)] for v, i in entry.aspace.lambdas_sorted()]
+        raw = entry.aspace.lambdas()
+        lam_list = [float(v) for v in raw]
+        sorted_raw = entry.aspace.lambdas_sorted()
+        lam_sorted = [[float(v), int(i)] for v, i in sorted_raw]
         return {
             "nitems": entry.nitems,
-            "lambdas": [float(v) for v in lam],
+            "lambdas": lam_list,
             "lambdas_sorted": lam_sorted,
         }
 
-    def graph_laplacian_info(self, dataset_id: str) -> dict[str, Any]:
-        entry = self._get_entry(dataset_id)
-        nnodes = int(entry.gl.nnodes)
-        try:
-            gl_shape = list(entry.gl.shape)
-        except TypeError:
-            gl_shape = [nnodes, nnodes]
-        return {
-            "nnodes": nnodes,
-            "shape": gl_shape,
-            "graph_params": entry.gl.graph_params,
-        }
-
-    def get_item(self, dataset_id: str, idx: int) -> dict[str, Any]:
-        entry = self._get_entry(dataset_id)
-        if idx < 0 or idx >= entry.nitems:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Item index {idx} out of range [0, {entry.nitems}).",
-            )
-        vec = entry.aspace.get_item(idx)
-        return {
-            "item_index": idx,
-            "vector": [float(v) for v in vec],
-        }
-
-    def get_all_items(self, dataset_id: str) -> dict[str, Any]:
-        entry = self._get_entry(dataset_id)
-        items = entry.aspace.get_all_items()
-        return {
-            "nitems": entry.nitems,
-            "items": [[float(v) for v in row] for row in items],
-        }
-
-    def search(self, dataset_id: str, query: dict[str, Any]) -> dict[str, Any]:
-        entry = self._get_entry(dataset_id)
-        q_arr = self._vec(query)
-        tau = float(query.get("tau", 1.0))
-        hits = entry.aspace.search(q_arr, entry.gl, tau)
-        return {
-            "backend": "arrowspace",
-            "results": [{"index": int(i), "score": float(s)} for i, s in hits],
-        }
-
-    def search_batch(self, dataset_id: str, query: dict[str, Any]) -> dict[str, Any]:
-        entry = self._get_entry(dataset_id)
-        vecs_raw = query.get("vectors")
-        if vecs_raw is None:
-            raise MetadataUnavailable("'vectors' is required in search_batch body")
-        try:
-            vecs = np.asarray(vecs_raw, dtype=np.float64)
-        except (ValueError, TypeError) as exc:
-            raise HTTPException(
-                status_code=422, detail="'vectors' must be a 2-D list of numbers"
-            ) from exc
-        tau = float(query.get("tau", 1.0))
-        batch_hits = entry.aspace.search_batch(vecs, entry.gl, tau)
-        return {
-            "backend": "arrowspace",
-            "results": [
-                [{"index": int(i), "score": float(s)} for i, s in hits]
-                for hits in batch_hits
-            ],
-        }
-
-    def search_energy(self, dataset_id: str, query: dict[str, Any]) -> dict[str, Any]:
-        entry = self._get_entry(dataset_id)
-        q_arr = self._vec(query)
-        k = int(query.get("k", DEFAULT_SEARCH_K))
-        hits = entry.aspace.search_energy(q_arr, entry.gl, k)
-        return {
-            "backend": "arrowspace",
-            "results": [{"index": int(i), "score": float(s)} for i, s in hits],
-        }
-
-    def search_hybrid(self, dataset_id: str, query: dict[str, Any]) -> dict[str, Any]:
-        entry = self._get_entry(dataset_id)
-        q_arr = self._vec(query)
-        alpha = float(query.get("alpha", 0.5))
-        hits = entry.aspace.search_hybrid(q_arr, entry.gl, alpha)
-        return {
-            "backend": "arrowspace",
-            "results": [{"index": int(i), "score": float(s)} for i, s in hits],
-        }
-
-    def search_linear_sorted(self, dataset_id: str, query: dict[str, Any]) -> dict[str, Any]:
-        entry = self._get_entry(dataset_id)
-        q_arr = self._vec(query)
-        k = int(query.get("k", DEFAULT_SEARCH_K))
-        hits = entry.aspace.search_linear_sorted(q_arr, entry.gl, k)
-        return {
-            "backend": "arrowspace",
-            "results": [{"index": int(i), "score": float(s)} for i, s in hits],
-        }
-
-    def _spot_hits(self, hits: Any) -> list[dict[str, Any]]:
-        return [{"index": int(i), "score": float(s)} for i, s in hits]
-
-    def spot_motives_eigen(self, dataset_id: str) -> dict[str, Any]:
-        entry = self._get_entry(dataset_id)
-        return {"method": "spot_motives_eigen", "results": self._spot_hits(entry.aspace.spot_motives_eigen())}
-
-    def spot_motives_energy(self, dataset_id: str) -> dict[str, Any]:
-        entry = self._get_entry(dataset_id)
-        return {"method": "spot_motives_energy", "results": self._spot_hits(entry.aspace.spot_motives_energy())}
-
-    def spot_subg_centroids(self, dataset_id: str) -> dict[str, Any]:
-        entry = self._get_entry(dataset_id)
-        return {"method": "spot_subg_centroids", "results": self._spot_hits(entry.aspace.spot_subg_centroids())}
-
-    def spot_subg_motives(self, dataset_id: str) -> dict[str, Any]:
-        entry = self._get_entry(dataset_id)
-        return {"method": "spot_subg_motives", "results": self._spot_hits(entry.aspace.spot_subg_motives())}
+    # ------------------------------------------------------------------
+    # Manifold and Stats (live)
+    # ------------------------------------------------------------------
 
     def manifold_data(self, dataset_id: str) -> dict[str, Any]:
         entry = self._get_entry(dataset_id)
-        lam_sorted = [[float(v), int(i)] for v, i in entry.aspace.lambdas_sorted()]
+        sorted_raw = entry.aspace.lambdas_sorted()
+        lam_sorted = [[float(v), int(i)] for v, i in sorted_raw][:50]
         return {
             "nitems": entry.nitems,
             "nfeatures": entry.nfeatures,
             "nclusters": entry.nclusters,
-            "lambdas_sorted": lam_sorted[:50],
+            "lambdas_sorted": lam_sorted,
         }
 
     def stats_data(self, dataset_id: str) -> dict[str, Any]:
         entry = self._get_entry(dataset_id)
-        nnodes = int(entry.gl.nnodes)
-        try:
-            gl_shape = list(entry.gl.shape)
-        except TypeError:
-            gl_shape = [nnodes, nnodes]
+        gl_shape = list(entry.gl.shape) if hasattr(entry.gl.shape, "__iter__") else [entry.gl.shape, entry.gl.shape]
         return {
             "nitems": entry.nitems,
             "nfeatures": entry.nfeatures,
             "nclusters": entry.nclusters,
-            "gl_nodes": nnodes,
-            "gl_shape": gl_shape,
+            "gl_nodes": int(entry.gl.nnodes),
+            "gl_shape": [int(x) for x in gl_shape],
         }
 
+    # ------------------------------------------------------------------
+    # Graph Laplacian info
+    # ------------------------------------------------------------------
+
+    def graph_laplacian_info(self, dataset_id: str) -> dict[str, Any]:
+        entry = self._get_entry(dataset_id)
+        gl_shape = list(entry.gl.shape) if hasattr(entry.gl.shape, "__iter__") else [entry.gl.shape, entry.gl.shape]
+        return {
+            "nnodes": int(entry.gl.nnodes),
+            "shape": [int(x) for x in gl_shape],
+            "graph_params": dict(entry.gl.graph_params),
+        }
+
+    # ------------------------------------------------------------------
+    # Item retrieval
+    # ------------------------------------------------------------------
+
+    def get_item(self, dataset_id: str, idx: int) -> dict[str, Any]:
+        entry = self._get_entry(dataset_id)
+        raw = entry.aspace.get_item(idx)
+        if hasattr(raw, "tolist"):
+            vec = raw.tolist()
+        else:
+            vec = [float(v) for v in raw]
+        return {"item_index": idx, "vector": vec}
+
+    def get_all_items(self, dataset_id: str) -> dict[str, Any]:
+        entry = self._get_entry(dataset_id)
+        raw = entry.aspace.get_all_items()
+        if hasattr(raw, "tolist"):
+            items = raw.tolist()
+        else:
+            items = [[float(v) for v in row] for row in raw]
+        return {"nitems": entry.nitems, "items": items}
+
+    # ------------------------------------------------------------------
+    # Search
+    # ------------------------------------------------------------------
+
+    def search(self, dataset_id: str, query: dict[str, Any]) -> dict[str, Any]:
+        entry = self._get_entry(dataset_id)
+        vec = query.get("vector")
+        if vec is None:
+            raise MetadataUnavailable("Missing required field: vector")
+        tau = float(query.get("tau", 1.0))
+        hits = entry.aspace.search(np.asarray(vec, dtype=np.float64), entry.gl, tau)
+        return {"backend": "arrowspace", "results": self._hits_to_results(hits)}
+
+    def search_batch(self, dataset_id: str, query: dict[str, Any]) -> dict[str, Any]:
+        entry = self._get_entry(dataset_id)
+        vecs = query.get("vectors")
+        if vecs is None:
+            raise MetadataUnavailable("Missing required field: vectors")
+        tau = float(query.get("tau", 1.0))
+        batch = np.asarray(vecs, dtype=np.float64)
+        hits_batch = entry.aspace.search_batch(batch, entry.gl, tau)
+        return {
+            "backend": "arrowspace",
+            "results": [self._hits_to_results(hits) for hits in hits_batch],
+        }
+
+    def search_energy(self, dataset_id: str, query: dict[str, Any]) -> dict[str, Any]:
+        entry = self._get_entry(dataset_id)
+        vec = query.get("vector")
+        if vec is None:
+            raise MetadataUnavailable("Missing required field: vector")
+        k = int(query.get("k", DEFAULT_SEARCH_K))
+        hits = entry.aspace.search_energy(np.asarray(vec, dtype=np.float64), entry.gl, k)
+        return {"backend": "arrowspace", "results": self._hits_to_results(hits)}
+
+    def search_hybrid(self, dataset_id: str, query: dict[str, Any]) -> dict[str, Any]:
+        entry = self._get_entry(dataset_id)
+        vec = query.get("vector")
+        if vec is None:
+            raise MetadataUnavailable("Missing required field: vector")
+        alpha = float(query.get("alpha", 0.5))
+        hits = entry.aspace.search_hybrid(np.asarray(vec, dtype=np.float64), entry.gl, alpha)
+        return {"backend": "arrowspace", "results": self._hits_to_results(hits)}
+
+    def search_linear_sorted(self, dataset_id: str, query: dict[str, Any]) -> dict[str, Any]:
+        entry = self._get_entry(dataset_id)
+        vec = query.get("vector")
+        if vec is None:
+            raise MetadataUnavailable("Missing required field: vector")
+        k = int(query.get("k", DEFAULT_SEARCH_K))
+        hits = entry.aspace.search_linear_sorted(np.asarray(vec, dtype=np.float64), entry.gl, k)
+        return {"backend": "arrowspace", "results": self._hits_to_results(hits)}
+
+    # ------------------------------------------------------------------
+    # Spot methods
+    # ------------------------------------------------------------------
+
+    def _spot(self, dataset_id: str, method_name: str) -> dict[str, Any]:
+        entry = self._get_entry(dataset_id)
+        fn = getattr(entry.aspace, method_name)
+        hits = fn()
+        return {"method": method_name, "results": self._hits_to_results(hits)}
+
+    def spot_motives_eigen(self, dataset_id: str) -> dict[str, Any]:
+        return self._spot(dataset_id, "spot_motives_eigen")
+
+    def spot_motives_energy(self, dataset_id: str) -> dict[str, Any]:
+        return self._spot(dataset_id, "spot_motives_energy")
+
+    def spot_subg_centroids(self, dataset_id: str) -> dict[str, Any]:
+        return self._spot(dataset_id, "spot_subg_centroids")
+
+    def spot_subg_motives(self, dataset_id: str) -> dict[str, Any]:
+        return self._spot(dataset_id, "spot_subg_motives")
+
+    # ------------------------------------------------------------------
+    # Sidecar pass-through (no-ops for the live adapter)
+    # ------------------------------------------------------------------
+
     def sidecar_manifold(self, dataset_path: Path) -> dict[str, Any]:
-        return _SidecarAdapter._read(dataset_path, "manifold.json")
+        # Live adapter doesn't read sidecars; routes try live first anyway.
+        raise MetadataUnavailable("sidecar not used by live ArrowSpace adapter")
 
     def sidecar_stats(self, dataset_path: Path) -> dict[str, Any]:
-        return _SidecarAdapter._read(dataset_path, "stats.json")
+        raise MetadataUnavailable("sidecar not used by live ArrowSpace adapter")
 
     def sidecar_search(
         self, dataset_path: Path, q: str, *, limit: int = 20
     ) -> list[dict[str, Any]]:
+        # Fall back to sidecar search for keyword queries
         return _SidecarAdapter().sidecar_search(dataset_path, q, limit=limit)
 
 
 # ---------------------------------------------------------------------------
-# Factory
+# Module-level load() + reset_adapter_cache()
 # ---------------------------------------------------------------------------
 
 
 @lru_cache(maxsize=1)
 def load() -> ArrowSpaceAdapter:
-    """Return the best available ArrowSpace adapter and pre-load persisted indices.
+    """Lazily import arrowspace and return the appropriate adapter.
 
-    Priority:
-    1. arrowspace package importable  -> _ArrowSpaceAdapter (with auto-load)
-    2. fallback                       -> _SidecarAdapter
+    Falls back to _SidecarAdapter if the package raises any Exception on import.
+    Falls back to _UnavailableAdapter if neither live nor sidecar is possible.
     """
-    from .settings import get_settings
-
     try:
         import arrowspace as _mod  # type: ignore
-        settings = get_settings()
-        cache_size = settings.index_cache_size
-        index_store = settings.effective_index_store()
-        log.info("arrowspace package found; using live adapter (cache_size=%d)", cache_size)
-        adapter = _ArrowSpaceAdapter(_mod, cache_size=cache_size)
-        n = adapter.load_persisted(index_store)
-        if n:
-            log.info("Pre-loaded %d persisted index(es) from %s", n, index_store)
-        return adapter
-    except Exception:  # catches ImportError AND NameError from broken __init__
-        log.info("arrowspace package not available; using sidecar adapter")
+        # Verify the module is usable
+        _ = _mod.ArrowSpaceBuilder
+        log.info("arrowspace package loaded; using live ArrowSpace adapter")
+        return _ArrowSpaceAdapter(_mod)
+    except Exception:
+        log.info(
+            "arrowspace package not available or broken; falling back to sidecar adapter",
+            exc_info=True,
+        )
         return _SidecarAdapter()
 
 
 def reset_adapter_cache() -> None:
+    """Clear the module-level load() LRU cache (used in tests to reset state)."""
     if hasattr(load, "cache_clear"):
         load.cache_clear()
