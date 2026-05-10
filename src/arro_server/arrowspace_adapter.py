@@ -10,29 +10,27 @@ Real arrowspace API (confirmed from package introspection)::
 
     from arrowspace import ArrowSpaceBuilder
 
-    # Phase 1 — build in memory only
-    aspace, gl = ArrowSpaceBuilder().build(graph_params, np_array_float64)
+    # Build index — returns a single ArrowSpace object (NOT a tuple)
+    aspace = ArrowSpaceBuilder().build_and_store(graph_params, items)
 
-    # Phase 2 — build and persist Parquet files
-    aspace, gl = ArrowSpaceBuilder().build_and_store(
-        graph_params, np_array_float64,
-        storage_path="storage/",
-        dataset_name="dataset_{uuid}",
-    )
+    # GraphLaplacian is an attribute on the returned object
+    gl = aspace.gl
 
-    # Phase 2 — reload without recomputing
-    aspace, gl = arrowspace.load_arrowspace(
+    # Reload persisted index without recomputing
+    aspace = arrowspace.load_arrowspace(
         storage_path="storage/",
         dataset_name="dataset_{uuid}",
         graph_params={...},
         energy=False,
     )
+    gl = aspace.gl
 
 ArrowSpace object public surface::
 
     aspace.nitems          int
     aspace.nfeatures       int
     aspace.nclusters       int
+    aspace.gl              GraphLaplacian
     aspace.lambdas()       -> np.ndarray          eigenvalue vector
     aspace.lambdas_sorted()-> List[(float, int)]  sorted (value, original_index)
     aspace.search(vec, gl, tau)             -> List[(int, float)]
@@ -55,12 +53,13 @@ GraphLaplacian object public surface::
     gl.to_csr()            -> (data, indices, indptr, shape)
     gl.to_dense()          -> np.ndarray  2D float32
 
-Phase 2 — Persistence
----------------------
+Persistence
+-----------
 On every ``build_index()`` call the adapter:
-  1. Calls ``ArrowSpaceBuilder().build_and_store()`` which writes two Parquet
-     files under ``<index_store>/<dataset_name>/``.
-  2. Records ``{dataset_id -> dataset_name}`` in
+  1. Calls ``ArrowSpaceBuilder().build_and_store(graph_params, items)``.
+  2. Persists the GraphLaplacian as Zarr v3 CSR arrays under
+     ``<index_store>/<slug>/`` via ``_persist_csr()``.
+  3. Records ``{dataset_id -> slug}`` in
      ``<index_store>/index_manifest.json``.
 
 On ``load()`` (server startup) the adapter:
@@ -75,7 +74,6 @@ from __future__ import annotations
 import json
 import logging
 import threading
-import uuid
 from abc import ABC, abstractmethod
 from collections import OrderedDict
 from dataclasses import dataclass, field
@@ -152,7 +150,7 @@ class ArrowSpaceAdapter(ABC):
 
 
 class _Manifest:
-    """JSON file that maps dataset_id -> dataset_name (Parquet slug).
+    """JSON file that maps dataset_id -> slug (CSR Zarr directory name).
 
     Thread-safe: all reads and writes are protected by a lock.
     """
@@ -178,20 +176,20 @@ class _Manifest:
         with self._lock:
             return dict(self._read())
 
-    def put(self, dataset_id: str, dataset_name: str) -> None:
+    def put(self, dataset_id: str, slug: str) -> None:
         with self._lock:
             data = self._read()
-            data[dataset_id] = dataset_name
+            data[dataset_id] = slug
             self._write(data)
 
     def remove(self, dataset_id: str) -> str | None:
-        """Remove entry; return the dataset_name that was stored, or None."""
+        """Remove entry; return the slug that was stored, or None."""
         with self._lock:
             data = self._read()
-            dataset_name = data.pop(dataset_id, None)
-            if dataset_name is not None:
+            slug = data.pop(dataset_id, None)
+            if slug is not None:
                 self._write(data)
-            return dataset_name
+            return slug
 
 
 # ---------------------------------------------------------------------------
@@ -372,7 +370,7 @@ class _IndexEntry:
     nitems: int
     nfeatures: int
     nclusters: int
-    dataset_name: str = field(default="")
+    slug: str = field(default="")
     graph_params: dict[str, Any] = field(default_factory=dict)
 
 
@@ -421,11 +419,44 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
 
     @staticmethod
     def _slug(dataset_id: str) -> str:
-        """Filesystem-safe name derived from dataset_id."""
+        """Filesystem-safe slug derived from dataset_id."""
         return "dataset_" + dataset_id.replace("/", "__").replace("\\", "__")
 
     # ------------------------------------------------------------------
-    # Phase 2: build_and_store + manifest
+    # Persist GraphLaplacian as Zarr v3 CSR arrays
+    # ------------------------------------------------------------------
+
+    def _persist_csr(self, index_store: Path, slug: str, gl: Any, meta: dict[str, Any]) -> None:
+        try:
+            import zarr  # type: ignore
+        except ImportError:
+            log.warning("zarr not installed; graph-Laplacian CSR will not be persisted")
+            return
+        try:
+            csr_data, csr_indices, csr_indptr, csr_shape = gl.to_csr()
+            dest = index_store / slug
+            dest.mkdir(parents=True, exist_ok=True)
+            for arr_name, arr_val in (
+                ("data", np.asarray(csr_data, dtype=np.float32)),
+                ("indices", np.asarray(csr_indices, dtype=np.int64)),
+                ("indptr", np.asarray(csr_indptr, dtype=np.int64)),
+            ):
+                zarr_path = dest / f"{arr_name}.zarr"
+                z = zarr.open(
+                    str(zarr_path), mode="w",
+                    shape=arr_val.shape, dtype=arr_val.dtype,
+                    chunks=True, zarr_format=3,
+                )
+                z[:] = arr_val
+            meta_dict = dict(meta)
+            meta_dict["csr_shape"] = list(csr_shape)
+            (dest / "meta.json").write_text(json.dumps(meta_dict))
+            log.info("Persisted graph-Laplacian CSR to %s", dest)
+        except Exception:
+            log.warning("Failed to persist CSR for '%s'", slug, exc_info=True)
+
+    # ------------------------------------------------------------------
+    # build_index
     # ------------------------------------------------------------------
 
     def build_index(
@@ -442,21 +473,19 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
                 f"arrowspace requires a 2-D array (items x features); got shape {arr64.shape}"
             )
 
-        # Unique Parquet slug for this dataset
-        dataset_name = self._slug(dataset_id)
+        slug = self._slug(dataset_id)
         index_store.mkdir(parents=True, exist_ok=True)
 
         log.info(
-            "Building index for '%s' shape=%s params=%s -> %s",
-            dataset_id, arr64.shape, gp, index_store / dataset_name,
+            "Building index for '%s' shape=%s params=%s",
+            dataset_id, arr64.shape, gp,
         )
 
-        aspace, gl = self._mod.ArrowSpaceBuilder().build_and_store(
-            gp,
-            arr64,
-            storage_path=str(index_store),
-            dataset_name=dataset_name,
-        )
+        # Correct API: build_and_store(graph_params, items) -> ArrowSpace
+        # No storage_path / dataset_name kwargs — those do not exist.
+        # The GraphLaplacian is accessed as aspace.gl (not a second return value).
+        aspace = self._mod.ArrowSpaceBuilder().build_and_store(gp, arr64)
+        gl = aspace.gl
 
         entry = _IndexEntry(
             aspace=aspace,
@@ -464,33 +493,32 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
             nitems=int(aspace.nitems),
             nfeatures=int(aspace.nfeatures),
             nclusters=int(aspace.nclusters),
-            dataset_name=dataset_name,
+            slug=slug,
             graph_params=gp,
         )
         self._cache.put(dataset_id, entry)
 
-        # Persist mapping to manifest
-        _Manifest(index_store).put(dataset_id, dataset_name)
-        log.info("Index for '%s' persisted as '%s'", dataset_id, dataset_name)
-
-        return {
+        meta = {
             "nitems": entry.nitems,
             "nfeatures": entry.nfeatures,
             "nclusters": entry.nclusters,
-            "dataset_name": dataset_name,
-            "graph_params": gp,
         }
+        # Persist CSR Zarr arrays and update manifest
+        self._persist_csr(index_store, slug, gl, meta)
+        _Manifest(index_store).put(dataset_id, slug)
+        log.info("Index for '%s' persisted as '%s'", dataset_id, slug)
+
+        return {**meta, "slug": slug, "graph_params": gp}
 
     # ------------------------------------------------------------------
-    # Phase 2: auto-load persisted indices
+    # Auto-load persisted indices at startup
     # ------------------------------------------------------------------
 
     def load_persisted(self, index_store: Path) -> int:
         """Read manifest and pre-load all known indices into the LRU cache.
 
         Called once at server startup. Returns the number of indices loaded.
-        Failures for individual indices are logged and skipped so the server
-        always starts cleanly.
+        Failures for individual indices are logged and skipped.
         """
         manifest = _Manifest(index_store).get_all()
         if not manifest:
@@ -498,28 +526,27 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
             return 0
 
         loaded = 0
-        for dataset_id, dataset_name in manifest.items():
+        for dataset_id, slug in manifest.items():
             if dataset_id in self._cache:
                 log.debug("'%s' already in cache, skipping reload", dataset_id)
                 loaded += 1
                 continue
             try:
-                log.info("Loading persisted index '%s' from '%s'", dataset_id, dataset_name)
-                # Reload graph_params from the manifest entry if stored,
-                # otherwise fall back to defaults so load_arrowspace() works.
-                aspace, gl = self._mod.load_arrowspace(
+                log.info("Loading persisted index '%s' from slug '%s'", dataset_id, slug)
+                aspace = self._mod.load_arrowspace(
                     storage_path=str(index_store),
-                    dataset_name=dataset_name,
+                    dataset_name=slug,
                     graph_params=DEFAULT_GRAPH_PARAMS,
                     energy=False,
                 )
+                gl = aspace.gl
                 entry = _IndexEntry(
                     aspace=aspace,
                     gl=gl,
                     nitems=int(aspace.nitems),
                     nfeatures=int(aspace.nfeatures),
                     nclusters=int(aspace.nclusters),
-                    dataset_name=dataset_name,
+                    slug=slug,
                     graph_params=DEFAULT_GRAPH_PARAMS,
                 )
                 self._cache.put(dataset_id, entry)
@@ -535,39 +562,32 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
         return loaded
 
     # ------------------------------------------------------------------
-    # Phase 2: delete index
+    # Delete index
     # ------------------------------------------------------------------
 
     def delete_index(self, dataset_id: str, index_store: Path) -> bool:
-        """Remove index from LRU cache, Parquet files and manifest.
-
-        Returns True if the index existed and was removed, False if it was
-        not found (idempotent — safe to call multiple times).
-        """
         manifest = _Manifest(index_store)
-        dataset_name = manifest.remove(dataset_id)
+        slug = manifest.remove(dataset_id)
         cache_hit = self._cache.delete(dataset_id)
 
-        if dataset_name:
-            # Remove Parquet directory written by build_and_store
-            parquet_dir = index_store / dataset_name
-            if parquet_dir.exists():
+        if slug:
+            csr_dir = index_store / slug
+            if csr_dir.exists():
                 import shutil
-                shutil.rmtree(parquet_dir, ignore_errors=True)
-                log.info("Deleted Parquet files for '%s' at %s", dataset_id, parquet_dir)
+                shutil.rmtree(csr_dir, ignore_errors=True)
+                log.info("Deleted CSR Zarr files for '%s' at %s", dataset_id, csr_dir)
 
-        return bool(dataset_name or cache_hit)
+        return bool(slug or cache_hit)
 
     # ------------------------------------------------------------------
-    # Health
+    # Health / introspection
     # ------------------------------------------------------------------
 
     def indexed_datasets(self) -> list[str]:
-        """Return dataset IDs currently held in the LRU cache."""
         return self._cache.keys()
 
     # ------------------------------------------------------------------
-    # Helpers shared by search methods
+    # Shared helpers
     # ------------------------------------------------------------------
 
     def _get_entry(self, dataset_id: str) -> _IndexEntry:
@@ -768,9 +788,6 @@ def load() -> ArrowSpaceAdapter:
     Priority:
     1. arrowspace package importable  -> _ArrowSpaceAdapter (with auto-load)
     2. fallback                       -> _SidecarAdapter
-
-    Phase 2: after building the live adapter, ``load_persisted()`` is called
-    so all previously built indices are restored from disk without recomputing.
     """
     from .settings import get_settings
 
@@ -781,7 +798,6 @@ def load() -> ArrowSpaceAdapter:
         index_store = settings.effective_index_store()
         log.info("arrowspace package found; using live adapter (cache_size=%d)", cache_size)
         adapter = _ArrowSpaceAdapter(_mod, cache_size=cache_size)
-        # Auto-load persisted indices on startup
         n = adapter.load_persisted(index_store)
         if n:
             log.info("Pre-loaded %d persisted index(es) from %s", n, index_store)
