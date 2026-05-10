@@ -1,0 +1,20 @@
+{
+  "trial": 18,
+  "score": 1.7170021589282956,
+  "params": {
+    "k": 29,
+    "eps": 0.9401998086373033,
+    "tau": 0.6064118855507693
+  },
+  "user_attrs": {
+    "fiedler": 0.02003804,
+    "var_lambda": 0.01478829,
+    "mrr_proxy": 2.445095,
+    "tau": 0.606412,
+    "n_sample": 2000,
+    "n_probe": 200
+  },
+  "timestamp": "20260414_103616",
+  "study_name": "nomic_struct_768d",
+  "n_trials": 20
+}

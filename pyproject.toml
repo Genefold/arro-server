@@ -5,19 +5,33 @@ build-backend = "hatchling.build"
 [project]
 name = "arro-server"
 version = "0.1.0"
-description = "FastAPI server for serving Zarr v3 datasets with ArrowSpace graph-Laplacian index"
+description = "FastAPI server for serving Zarr v3 datasets with ArrowSpace graph-Laplacian index (Includes Semantic Engine Demo)"
 readme = "README.md"
 requires-python = ">=3.12"
-license = { text = "Apache-2.0" }
+license = { file = "LICENSE" }
 authors = [{ name = "Genefold / ArrowSpace contributors" }]
 dependencies = [
+    "arrowspace>=0.26.2",
+    "arrowspace-tuner>=0.3.1",
+    "einops>=0.8.2",
     "fastapi>=0.110",
-    "uvicorn[standard]>=0.27",
+    "google-genai>=1.70.0",
+    "ipykernel>=7.2.0",
+    "matplotlib>=3.10.8",
+    "nbformat>=5.10.4",
+    "numpy>=1.26",
+    "pandas>=3.0.1",
+    "plotly>=6.7.0",
     "pydantic>=2.6",
     "pydantic-settings>=2.2",
-    "numpy>=1.26",
-    "zarr>=3.0",
-    "arrowspace>=0.26.2"
+    "requests>=2.33.1",
+    "sentence-transformers>=5.3.0",
+    "tinydb>=4.8.2",
+    "torch",
+    "torchaudio",
+    "torchvision",
+    "uvicorn[standard]>=0.27",
+    "zarr>=3.0"
 ]
 
 [project.optional-dependencies]
@@ -40,7 +54,10 @@ dev = [
 arro-server = "arro_server.__main__:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/arro_server"]
+packages = [
+    "src/arro_server",
+    "src/semantic_engine_demo"
+]
 
 [tool.hatch.build.targets.wheel.shared-data]
 "frontend" = "share/arro_server/frontend"
