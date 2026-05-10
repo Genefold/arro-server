@@ -34,9 +34,6 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------------
     # ArrowSpace index store
     # ------------------------------------------------------------------
-    # Phase 1 name kept as alias so existing .env files keep working.
-    # Phase 2 canonical name: ARROWSPACE_INDEX_STORE
-    # Both env vars are accepted; ARROWSPACE_INDEX_STORE takes precedence.
     arrowspace_index_store: Path = Field(
         default=Path("./storage"),
         description=(
@@ -48,7 +45,6 @@ class Settings(BaseSettings):
         validation_alias="arrowspace_index_store",
     )
 
-    # Legacy alias — if the new var is not set, fall back to INDEX_STORE.
     index_store: Path = Field(
         default=Path("./storage"),
         description="Legacy alias for arrowspace_index_store (ARRO_SERVER_INDEX_STORE).",
@@ -79,6 +75,19 @@ class Settings(BaseSettings):
         description=(
             "Comma-separated allowed CORS origins. "
             "Use '*' for development only — restrict in production."
+        ),
+    )
+
+    # ------------------------------------------------------------------
+    # Auth
+    # ------------------------------------------------------------------
+    api_key: str = Field(
+        default="",
+        description=(
+            "Static API key required in the X-API-Key header for write operations "
+            "(POST /index, DELETE /index). "
+            "Leave empty to run in open mode (no auth). "
+            "Env var: ARRO_SERVER_API_KEY."
         ),
     )
 

@@ -9,9 +9,17 @@ services:
       ARRO_SERVER_DATA_ROOTS: "main=/data/zarr"
       ARRO_SERVER_ARROWSPACE_INDEX_STORE: "/index-store"
       ARRO_SERVER_INDEX_CACHE_SIZE: "8"
+      # CORS: restrict to your actual frontend origin(s) in production.
+      # Example: ARRO_SERVER_CORS_ORIGINS=https://app.example.com
+      # Use '*' only for local development.
       ARRO_SERVER_CORS_ORIGINS: "*"
       ARRO_SERVER_LOG_LEVEL: "info"
       ARRO_SERVER_SERVE_FRONTEND: "true"
+      # API key for write operations (POST /index, DELETE /index).
+      # Leave empty (or omit) to run in open mode (no auth).
+      # In production, set a strong random secret:
+      #   ARRO_SERVER_API_KEY=<openssl rand -hex 32>
+      ARRO_SERVER_API_KEY: ""
     volumes:
       # Zarr dataset root — mount your data here
       - zarr_data:/data/zarr

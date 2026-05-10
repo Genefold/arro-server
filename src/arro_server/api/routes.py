@@ -13,8 +13,8 @@ GET    /api/datasets/{id}/slice
 GET    /api/datasets/{id}/stats
 GET    /api/datasets/{id}/manifold
 GET    /api/datasets/{id}/search               -- keyword (sidecar)
-POST   /api/datasets/{id}/index                -- build index
-DELETE /api/datasets/{id}/index                -- evict + delete index
+POST   /api/datasets/{id}/index                -- build index  [auth]
+DELETE /api/datasets/{id}/index                -- evict + delete index  [auth]
 GET    /api/datasets/{id}/lambdas              -- eigenvalue distribution
 GET    /api/datasets/{id}/graph_laplacian      -- GL metadata
 GET    /api/datasets/{id}/items                -- all items from index
@@ -32,6 +32,7 @@ GET    /api/datasets/{id}/spot/subgraphs/motives
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +41,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from .. import __version__
 from ..arrowspace_adapter import DEFAULT_GRAPH_PARAMS, ArrowSpaceAdapter, _ArrowSpaceAdapter
 from ..arrowspace_adapter import load as load_arrowspace
+from ..auth import verify_api_key
 from ..errors import DatasetNotSliceable, InvalidSlice
 from ..settings import Settings, get_settings
 from ..slicing import enforce_window_budget, parse_slice, trailing_product
@@ -85,6 +87,7 @@ def health(settings: Settings = Depends(get_settings)) -> dict[str, Any]:
         "arrowspace_available": adapter.available,
         "data_roots": list(settings.resolved_roots.keys()),
         "indexed_datasets": indexed,
+        "auth_enabled": bool((settings.api_key or "").strip()),
     }
 
 
@@ -142,6 +145,7 @@ def dataset_data(
     h = reg.open(dataset_id)
     if not h.summary.shape:
         raise DatasetNotSliceable(dataset_id, "dataset has no shape")
+    # Use caller-supplied limit, else fall back to settings.default_window.
     eff_limit = limit or settings.default_window
     rs = parse_slice(None, h.summary.shape, offset=offset, limit=eff_limit)
     try:
@@ -263,33 +267,43 @@ def dataset_search_sidecar(
 
 
 # ---------------------------------------------------------------------------
-# Index lifecycle
+# Index lifecycle  [protected by API-key auth when ARRO_SERVER_API_KEY is set]
 # ---------------------------------------------------------------------------
 
 
 @router.post("/datasets/{dataset_id}/index")
-def build_index(
+async def build_index(
     dataset_id: str,
     body: IndexBuildRequest = IndexBuildRequest(),
     reg: StorageRegistry = Depends(_registry),
     settings: Settings = Depends(get_settings),
     adapter: ArrowSpaceAdapter = Depends(_arrowspace),
+    _auth: None = Depends(verify_api_key),
 ) -> dict[str, Any]:
-    """Build (or rebuild) the ArrowSpace graph-Laplacian index."""
+    """Build (or rebuild) the ArrowSpace graph-Laplacian index.
+
+    The CPU-intensive build runs in a thread-pool via asyncio.to_thread so
+    it does not block the event loop while processing large arrays.
+    """
     h = reg.open(dataset_id)
     rs = parse_slice(None, h.summary.shape, offset=0, limit=h.summary.shape[0])
     arr = h.read_window(rs)
     index_store = settings.effective_index_store()
     effective_params = body.graph_params or DEFAULT_GRAPH_PARAMS
-    try:
-        meta = adapter.build_index(
+
+    def _build() -> dict[str, Any]:
+        return adapter.build_index(
             dataset_id=dataset_id,
             array=arr,
             index_store=index_store,
             graph_params=effective_params,
         )
+
+    try:
+        meta = await asyncio.to_thread(_build)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
     return {
         "id": dataset_id,
         "built": True,
@@ -305,11 +319,13 @@ def delete_index(
     dataset_id: str,
     settings: Settings = Depends(get_settings),
     adapter: ArrowSpaceAdapter = Depends(_arrowspace),
+    _auth: None = Depends(verify_api_key),
 ) -> dict[str, Any]:
     """Evict the ArrowSpace index from the LRU cache, remove Parquet files
     and remove the manifest entry.
 
-    Safe to call even if no index exists (idempotent — returns found=False).
+    Safe to call even if no index exists (idempotent — returns deleted=False).
+    Requires X-API-Key header if ARRO_SERVER_API_KEY is configured.
     """
     index_store = settings.effective_index_store()
     found = adapter.delete_index(dataset_id, index_store)
