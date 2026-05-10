@@ -18,11 +18,11 @@ ArrowSpace object public surface::
     aspace.nclusters       int
     aspace.lambdas()       -> np.ndarray          eigenvalue vector
     aspace.lambdas_sorted()-> List[(float, int)]  sorted (value, original_index)
-    aspace.search(vec, gl, tau)  -> List[(int, float)]
-    aspace.search_batch(vecs, gl, tau) -> List[List[(int, float)]]
-    aspace.search_energy(vec, gl)      -> List[(int, float)]
-    aspace.search_hybrid(vec, gl, tau, alpha) -> List[(int, float)]
-    aspace.search_linear_sorted(vec, gl)       -> List[(int, float)]
+    aspace.search(vec, gl, tau)             -> List[(int, float)]
+    aspace.search_batch(vecs, gl, tau)      -> List[List[(int, float)]]
+    aspace.search_energy(vec, gl, k)        -> List[(int, float)]
+    aspace.search_hybrid(vec, gl, alpha)    -> List[(int, float)]
+    aspace.search_linear_sorted(vec, gl, k) -> List[(int, float)]
     aspace.get_item(i)     -> item at position i
     aspace.get_all_items() -> all items
     aspace.spot_motives_eigen()    -> List[(int, float)]
@@ -64,6 +64,8 @@ DEFAULT_GRAPH_PARAMS: dict[str, Any] = {
     "p": 2.0,
     "sigma": 1.0,
 }
+
+DEFAULT_SEARCH_K: int = 10
 
 
 # ---------------------------------------------------------------------------
@@ -428,6 +430,11 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
 
     def get_item(self, dataset_id: str, idx: int) -> dict[str, Any]:
         entry = self._get_entry(dataset_id)
+        if idx < 0 or idx >= entry.nitems:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Item index {idx} out of range [0, {entry.nitems}).",
+            )
         vec = entry.aspace.get_item(idx)
         return {
             "item_index": idx,
@@ -474,7 +481,8 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
     def search_energy(self, dataset_id: str, query: dict[str, Any]) -> dict[str, Any]:
         entry = self._get_entry(dataset_id)
         q_arr = self._vec(query)
-        hits = entry.aspace.search_energy(q_arr, entry.gl)
+        k = int(query.get("k", DEFAULT_SEARCH_K))
+        hits = entry.aspace.search_energy(q_arr, entry.gl, k)
         return {
             "backend": "arrowspace",
             "results": [{"index": int(i), "score": float(s)} for i, s in hits],
@@ -483,9 +491,8 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
     def search_hybrid(self, dataset_id: str, query: dict[str, Any]) -> dict[str, Any]:
         entry = self._get_entry(dataset_id)
         q_arr = self._vec(query)
-        tau = float(query.get("tau", 1.0))
         alpha = float(query.get("alpha", 0.5))
-        hits = entry.aspace.search_hybrid(q_arr, entry.gl, tau, alpha)
+        hits = entry.aspace.search_hybrid(q_arr, entry.gl, alpha)
         return {
             "backend": "arrowspace",
             "results": [{"index": int(i), "score": float(s)} for i, s in hits],
@@ -494,7 +501,8 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
     def search_linear_sorted(self, dataset_id: str, query: dict[str, Any]) -> dict[str, Any]:
         entry = self._get_entry(dataset_id)
         q_arr = self._vec(query)
-        hits = entry.aspace.search_linear_sorted(q_arr, entry.gl)
+        k = int(query.get("k", DEFAULT_SEARCH_K))
+        hits = entry.aspace.search_linear_sorted(q_arr, entry.gl, k)
         return {
             "backend": "arrowspace",
             "results": [{"index": int(i), "score": float(s)} for i, s in hits],

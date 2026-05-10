@@ -25,23 +25,34 @@ class SearchRequest(BaseModel):
 
 
 class SearchEnergyRequest(BaseModel):
-    """Body for POST /datasets/{id}/search/energy."""
+    """Body for POST /datasets/{id}/search/energy.
+
+    Real arrowspace signature: search_energy(vec, gl, k)
+    """
 
     vector: list[float] = Field(..., description="Query vector (float64 values).")
+    k: int = Field(10, ge=1, description="Number of results to return.")
 
 
 class SearchHybridRequest(BaseModel):
-    """Body for POST /datasets/{id}/search/hybrid."""
+    """Body for POST /datasets/{id}/search/hybrid.
+
+    Real arrowspace signature: search_hybrid(vec, gl, alpha)
+    Note: 'tau' is NOT a parameter of the real search_hybrid implementation.
+    """
 
     vector: list[float] = Field(..., description="Query vector (float64 values).")
-    tau: float = Field(1.0, description="Taumode tau parameter.")
     alpha: float = Field(0.5, ge=0.0, le=1.0, description="Blend factor (0=spectral, 1=linear).")
 
 
 class SearchLinearRequest(BaseModel):
-    """Body for POST /datasets/{id}/search/linear."""
+    """Body for POST /datasets/{id}/search/linear.
+
+    Real arrowspace signature: search_linear_sorted(vec, gl, k)
+    """
 
     vector: list[float] = Field(..., description="Query vector (float64 values).")
+    k: int = Field(10, ge=1, description="Number of results to return.")
 
 
 class SearchBatchRequest(BaseModel):
