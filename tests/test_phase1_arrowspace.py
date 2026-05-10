@@ -12,6 +12,12 @@ Bug fixes reflected here:
      now return 422 before the route body runs.
   3. arrowspace load() catches Exception (not just ImportError) so a
      broken __init__.py falls back to sidecar without crashing.
+
+Phase 2 contract update:
+  - FakeBuilder now exposes build_and_store(graph_params, array) -> (aspace, gl)
+    to match the production call in _ArrowSpaceAdapter.build_index().
+  - The fake module also exposes load_arrowspace() so load_persisted()
+    can run without AttributeError during integration fixture setup.
 """
 
 import os
@@ -79,11 +85,21 @@ def _make_fake_arrowspace_module() -> types.ModuleType:
     aspace = _make_fake_aspace()
     gl = _make_fake_gl()
 
+    # Phase 2 contract: production calls build_and_store(graph_params, array)
+    # which returns a 2-tuple (ArrowSpace, GraphLaplacian).
     class FakeBuilder:
-        def build(self, graph_params, array):
+        def build_and_store(self, graph_params, array):  # noqa: ARG002
             return aspace, gl
 
     fake_mod.ArrowSpaceBuilder = FakeBuilder  # type: ignore[attr-defined]
+
+    # Phase 2 contract: load_persisted() calls mod.load_arrowspace(...)
+    # which also returns a 2-tuple (ArrowSpace, GraphLaplacian).
+    def _load_arrowspace(**kwargs):  # noqa: ARG001
+        return aspace, gl
+
+    fake_mod.load_arrowspace = _load_arrowspace  # type: ignore[attr-defined]
+
     return fake_mod
 
 
