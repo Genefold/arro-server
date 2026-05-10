@@ -25,31 +25,21 @@ class SearchRequest(BaseModel):
 
 
 class SearchEnergyRequest(BaseModel):
-    """Body for POST /datasets/{id}/search/energy.
-
-    Real arrowspace signature: search_energy(vec, gl, k)
-    """
+    """Body for POST /datasets/{id}/search/energy."""
 
     vector: list[float] = Field(..., description="Query vector (float64 values).")
     k: int = Field(10, ge=1, description="Number of results to return.")
 
 
 class SearchHybridRequest(BaseModel):
-    """Body for POST /datasets/{id}/search/hybrid.
-
-    Real arrowspace signature: search_hybrid(vec, gl, alpha)
-    Note: 'tau' is NOT a parameter of the real search_hybrid implementation.
-    """
+    """Body for POST /datasets/{id}/search/hybrid."""
 
     vector: list[float] = Field(..., description="Query vector (float64 values).")
     alpha: float = Field(0.5, ge=0.0, le=1.0, description="Blend factor (0=spectral, 1=linear).")
 
 
 class SearchLinearRequest(BaseModel):
-    """Body for POST /datasets/{id}/search/linear.
-
-    Real arrowspace signature: search_linear_sorted(vec, gl, k)
-    """
+    """Body for POST /datasets/{id}/search/linear."""
 
     vector: list[float] = Field(..., description="Query vector (float64 values).")
     k: int = Field(10, ge=1, description="Number of results to return.")
@@ -62,15 +52,19 @@ class SearchBatchRequest(BaseModel):
     tau: float = Field(1.0, description="Taumode tau parameter.")
 
 
-# --- add after the existing SearchBatchRequest class ---
-
 class PromptSearchRequest(BaseModel):
-    """Body for POST /api/prompts/search — semantic prompt search with MMR rerank."""
-    vector: list[float] = Field(..., description="768-dim query vector, already embedded.")
-    k: int              = Field(10, ge=1, le=100, description="Number of results.")
-    alpha: float        = Field(0.6, ge=0.0, le=1.0, description="Cosine vs spectral blend.")
+    """Body for POST /api/prompts/search — semantic prompt search with MMR rerank.
 
-    
+    eps and k are fixed at build time from the latest tuner run.
+    tau controls spectral sharpness at query time (user-controlled, default 0.75).
+    """
+
+    vector: list[float] = Field(..., description="768-dim nomic-embed-text-v1.5 query vector.")
+    k: int              = Field(10, ge=1, le=100, description="Number of results to return.")
+    tau: float          = Field(0.75, ge=0.0, le=5.0, description="Spectral sharpness (0=broad, 5=sharp). Default 0.75.")
+    alpha: float        = Field(0.6, ge=0.0, le=1.0, description="Cosine vs spectral blend (0=spectral, 1=cosine).")
+
+
 class IndexBuildRequest(BaseModel):
     """Optional body for POST /datasets/{id}/index.
 
@@ -96,10 +90,8 @@ class IndexBuildRequest(BaseModel):
         """If the body is a flat dict of graph-param keys, wrap it."""
         if not isinstance(values, dict):
             return values
-        # Already structured — has "graph_params" key or is empty
         if "graph_params" in values or not values:
             return values
-        # All keys are known graph-param keys → flat payload
         if values.keys() <= _GRAPH_PARAM_KEYS:
             return {"graph_params": values}
         return values

@@ -27,10 +27,12 @@ GET  /api/datasets/{id}/spot/motives/eigen
 GET  /api/datasets/{id}/spot/motives/energy
 GET  /api/datasets/{id}/spot/subgraphs/centroids
 GET  /api/datasets/{id}/spot/subgraphs/motives
+POST /api/prompts/search                     -- LEAF kaban semantic search
 """
 
 from __future__ import annotations
 
+import numpy as np
 from pathlib import Path
 from typing import Any
 
@@ -40,24 +42,23 @@ from .. import __version__
 from ..arrowspace_adapter import DEFAULT_GRAPH_PARAMS, ArrowSpaceAdapter, _ArrowSpaceAdapter
 from ..arrowspace_adapter import load as load_arrowspace
 from ..errors import DatasetNotSliceable, InvalidSlice
+from ..search_engine import PromptSearchEngine
 from ..settings import Settings, get_settings
 from ..slicing import enforce_window_budget, parse_slice, trailing_product
 from ..storage import StorageRegistry, get_registry
 from ..storage.zarr_fs import zarr_available
-from ..search_engine import PromptSearchEngine
 from .schemas import (
     IndexBuildRequest,
+    PromptSearchRequest,
     SearchBatchRequest,
     SearchEnergyRequest,
     SearchHybridRequest,
     SearchLinearRequest,
     SearchRequest,
-    PromptSearchRequest,
 )
 from .serializers import array_to_payload
 
 router = APIRouter(prefix="/api")
-_engine = None
 
 
 def _registry() -> StorageRegistry:
@@ -272,11 +273,7 @@ def build_index(
     settings: Settings = Depends(get_settings),
     adapter: ArrowSpaceAdapter = Depends(_arrowspace),
 ) -> dict[str, Any]:
-    """Build (or rebuild) the ArrowSpace graph-Laplacian index.
-
-    FIX: catch ValueError from adapter (e.g. 1-D array) and return 422.
-    FIX: response returns graph_params flat alongside nitems/nfeatures/nclusters.
-    """
+    """Build (or rebuild) the ArrowSpace graph-Laplacian index."""
     h = reg.open(dataset_id)
     rs = parse_slice(None, h.summary.shape, offset=0, limit=h.summary.shape[0])
     arr = h.read_window(rs)
@@ -355,8 +352,6 @@ def dataset_get_item(
 
 # ---------------------------------------------------------------------------
 # Vector search variants
-# FIX: all POST /search* endpoints now use typed Pydantic models instead of
-# dict[str, Any] so FastAPI returns 422 for missing/wrong fields automatically.
 # ---------------------------------------------------------------------------
 
 
@@ -451,19 +446,26 @@ def dataset_spot_subg_motives(
     return {"id": dataset_id, "backend": adapter.backend, **data}
 
 
-# Prompt semantic search (LEAF kaban engine)
+# ---------------------------------------------------------------------------
+# LEAF kaban — Prompt semantic search
+# ---------------------------------------------------------------------------
+
+
 @router.post("/prompts/search")
 def prompt_search(body: PromptSearchRequest) -> dict:
+    """Semantic search over the 20k prompt corpus.
+
+    Input:  768-dim nomic-embed-text-v1.5 vector (embedded by caller).
+    Output: top-k prompt JSON records enriched with _score, _salience, _tau.
+
+    Graph topology (eps, k) is fixed at startup from the latest tuner run.
+    tau controls spectral sharpness at query time (default 0.75, range 0–5).
     """
-    Semantic search over the 20k prompt corpus.
-    Input:  768-dim nomic-embed-text-v1.5 vector (already embedded by caller).
-    Output: top-k prompt JSON records with _score and _salience fields added.
-    """
-    import numpy as np
     engine  = PromptSearchEngine.get()
     results = engine.search(
         query_vec=np.array(body.vector, dtype=np.float64),
         k=body.k,
+        tau=body.tau,
         alpha=body.alpha,
     )
     return {"count": len(results), "results": results}
