@@ -9,17 +9,35 @@ services:
       ARRO_SERVER_DATA_ROOTS: "main=/data/zarr"
       ARRO_SERVER_ARROWSPACE_INDEX_STORE: "/index-store"
       ARRO_SERVER_INDEX_CACHE_SIZE: "8"
-      # CORS: restrict to your actual frontend origin(s) in production.
+
+      # Deployment tier.
+      # Set to 'production' to enforce CORS restriction, API key, and JSON logging.
+      # In production this MUST be 'production'.
+      ARRO_SERVER_ENV: "development"
+
+      # CORS: set to your actual frontend origin(s) in production.
       # Example: ARRO_SERVER_CORS_ORIGINS=https://app.example.com
-      # Use '*' only for local development.
+      # WARNING: '*' is rejected when ARRO_SERVER_ENV=production.
       ARRO_SERVER_CORS_ORIGINS: "*"
+
       ARRO_SERVER_LOG_LEVEL: "info"
+
+      # Set to 'true' in production for structured JSON log lines.
+      # Automatically forced to 'true' when ARRO_SERVER_ENV=production.
+      ARRO_SERVER_LOG_JSON: "false"
+
       ARRO_SERVER_SERVE_FRONTEND: "true"
+
       # API key for write operations (POST /index, DELETE /index).
-      # Leave empty (or omit) to run in open mode (no auth).
-      # In production, set a strong random secret:
-      #   ARRO_SERVER_API_KEY=<openssl rand -hex 32>
+      # REQUIRED when ARRO_SERVER_ENV=production.
+      # Generate a strong secret: openssl rand -hex 32
+      # Clients must send:  X-API-Key: <value>
       ARRO_SERVER_API_KEY: ""
+
+      # Rate limit for write endpoints. Uses limits library syntax.
+      # Examples: '30/minute', '5/second', '' (empty = disabled).
+      ARRO_SERVER_RATE_LIMIT_WRITE: "30/minute"
+
     volumes:
       # Zarr dataset root — mount your data here
       - zarr_data:/data/zarr
@@ -36,9 +54,5 @@ services:
 volumes:
   zarr_data:
     driver: local
-  # Dedicated volume for ArrowSpace Parquet index files and index_manifest.json.
-  # Survives container restarts and upgrades — indices are never recomputed
-  # unless you explicitly POST /api/datasets/{id}/index or
-  # DELETE /api/datasets/{id}/index.
   arrow_index_store:
     driver: local

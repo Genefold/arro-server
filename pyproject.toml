@@ -17,14 +17,14 @@ dependencies = [
     "pydantic-settings>=2.2",
     "numpy>=1.26",
     "zarr>=3.0",
-    "arrowspace>=0.26.2"
+    "arrowspace>=0.26.2",
+    "slowapi>=0.1.9",
 ]
 
 [project.optional-dependencies]
 zarr = ["zarr>=3.0", "fsspec>=2024.2"]
 arrow = ["pyarrow>=15.0"]
 # pip install arrowspace  (repo: https://github.com/tuned-org-uk/pyarrowspace)
-# Task 1.1: renamed extra key from 'pyarrowspace' -> 'arrowspace' to match PyPI package name
 arrowspace = ["arrowspace"]
 dev = [
     "pytest>=8.0",
@@ -33,7 +33,7 @@ dev = [
     "httpx>=0.27",
     "ruff>=0.4",
     "fsspec>=2024.2",
-    "pre-commit"
+    "pre-commit",
 ]
 
 [project.scripts]

@@ -13,8 +13,8 @@ GET    /api/datasets/{id}/slice
 GET    /api/datasets/{id}/stats
 GET    /api/datasets/{id}/manifold
 GET    /api/datasets/{id}/search               -- keyword (sidecar)
-POST   /api/datasets/{id}/index                -- build index  [auth]
-DELETE /api/datasets/{id}/index                -- evict + delete index  [auth]
+POST   /api/datasets/{id}/index                -- build index  [auth][rate-limited]
+DELETE /api/datasets/{id}/index                -- evict + delete index  [auth][rate-limited]
 GET    /api/datasets/{id}/lambdas              -- eigenvalue distribution
 GET    /api/datasets/{id}/graph_laplacian      -- GL metadata
 GET    /api/datasets/{id}/items                -- all items from index
@@ -36,7 +36,7 @@ import asyncio
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from .. import __version__
 from ..arrowspace_adapter import DEFAULT_GRAPH_PARAMS, ArrowSpaceAdapter, _ArrowSpaceAdapter
@@ -68,6 +68,11 @@ def _arrowspace() -> ArrowSpaceAdapter:
     return load_arrowspace()
 
 
+def _get_limiter(request: Request):
+    """Return the slowapi Limiter from app state, or None if not configured."""
+    return getattr(request.app.state, "limiter", None)
+
+
 # ---------------------------------------------------------------------------
 # Health
 # ---------------------------------------------------------------------------
@@ -82,12 +87,14 @@ def health(settings: Settings = Depends(get_settings)) -> dict[str, Any]:
     return {
         "status": "ok",
         "version": __version__,
+        "env": settings.env,
         "zarr_available": zarr_available(),
         "arrowspace_backend": adapter.backend,
         "arrowspace_available": adapter.available,
         "data_roots": list(settings.resolved_roots.keys()),
         "indexed_datasets": indexed,
         "auth_enabled": bool((settings.api_key or "").strip()),
+        "rate_limit_write": settings.rate_limit_write or "disabled",
     }
 
 
@@ -145,7 +152,6 @@ def dataset_data(
     h = reg.open(dataset_id)
     if not h.summary.shape:
         raise DatasetNotSliceable(dataset_id, "dataset has no shape")
-    # Use caller-supplied limit, else fall back to settings.default_window.
     eff_limit = limit or settings.default_window
     rs = parse_slice(None, h.summary.shape, offset=offset, limit=eff_limit)
     try:
@@ -267,12 +273,13 @@ def dataset_search_sidecar(
 
 
 # ---------------------------------------------------------------------------
-# Index lifecycle  [protected by API-key auth when ARRO_SERVER_API_KEY is set]
+# Index lifecycle  [protected by API-key auth + rate limiting]
 # ---------------------------------------------------------------------------
 
 
 @router.post("/datasets/{dataset_id}/index")
 async def build_index(
+    request: Request,
     dataset_id: str,
     body: IndexBuildRequest = IndexBuildRequest(),
     reg: StorageRegistry = Depends(_registry),
@@ -284,7 +291,15 @@ async def build_index(
 
     The CPU-intensive build runs in a thread-pool via asyncio.to_thread so
     it does not block the event loop while processing large arrays.
+    Rate-limited per IP (see ARRO_SERVER_RATE_LIMIT_WRITE).
     """
+    # Apply rate limit if slowapi limiter is available.
+    limiter = _get_limiter(request)
+    if limiter and settings.rate_limit_write:
+        await limiter._check_request_limit(  # type: ignore[attr-defined]
+            request, build_index, settings.rate_limit_write
+        )
+
     h = reg.open(dataset_id)
     rs = parse_slice(None, h.summary.shape, offset=0, limit=h.summary.shape[0])
     arr = h.read_window(rs)
@@ -316,15 +331,15 @@ async def build_index(
 
 @router.delete("/datasets/{dataset_id}/index")
 def delete_index(
+    request: Request,
     dataset_id: str,
     settings: Settings = Depends(get_settings),
     adapter: ArrowSpaceAdapter = Depends(_arrowspace),
     _auth: None = Depends(verify_api_key),
 ) -> dict[str, Any]:
-    """Evict the ArrowSpace index from the LRU cache, remove Parquet files
-    and remove the manifest entry.
+    """Evict the ArrowSpace index from the LRU cache and remove Zarr CSR files.
 
-    Safe to call even if no index exists (idempotent — returns deleted=False).
+    Safe to call even if no index exists (idempotent).
     Requires X-API-Key header if ARRO_SERVER_API_KEY is configured.
     """
     index_store = settings.effective_index_store()

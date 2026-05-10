@@ -8,9 +8,9 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -20,6 +20,18 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
+    )
+
+    # ------------------------------------------------------------------
+    # Environment tier
+    # ------------------------------------------------------------------
+    env: Literal["development", "production"] = Field(
+        default="development",
+        description=(
+            "Deployment tier. Set to 'production' to enable safety guards "
+            "(strict CORS, API key required, JSON logging). "
+            "Env var: ARRO_SERVER_ENV."
+        ),
     )
 
     # ------------------------------------------------------------------
@@ -67,6 +79,17 @@ class Settings(BaseSettings):
     reload: bool = Field(default=False)
     log_level: str = Field(default="info")
 
+    # Emit structured JSON log lines (one JSON object per line).
+    # Automatically set to True when env='production' via the model validator.
+    log_json: bool = Field(
+        default=False,
+        description=(
+            "Emit structured JSON log lines. "
+            "Defaults to True when ARRO_SERVER_ENV=production. "
+            "Env var: ARRO_SERVER_LOG_JSON."
+        ),
+    )
+
     # ------------------------------------------------------------------
     # CORS
     # ------------------------------------------------------------------
@@ -74,7 +97,16 @@ class Settings(BaseSettings):
         default="*",
         description=(
             "Comma-separated allowed CORS origins. "
-            "Use '*' for development only — restrict in production."
+            "Use '*' for development only. "
+            "MUST be restricted (not '*') when ARRO_SERVER_ENV=production."
+        ),
+    )
+
+    cors_allow_credentials: bool = Field(
+        default=False,
+        description=(
+            "Set to True to allow cookies / Authorization headers from "
+            "cross-origin requests. When True, cors_origins must NOT be '*'."
         ),
     )
 
@@ -87,7 +119,20 @@ class Settings(BaseSettings):
             "Static API key required in the X-API-Key header for write operations "
             "(POST /index, DELETE /index). "
             "Leave empty to run in open mode (no auth). "
+            "MUST be set when ARRO_SERVER_ENV=production. "
             "Env var: ARRO_SERVER_API_KEY."
+        ),
+    )
+
+    # ------------------------------------------------------------------
+    # Rate limiting  (uses slowapi / limits library)
+    # ------------------------------------------------------------------
+    rate_limit_write: str = Field(
+        default="30/minute",
+        description=(
+            "Rate-limit string applied to write endpoints (POST /index, "
+            "DELETE /index). Uses the `limits` library syntax: '30/minute', "
+            "'5/second', etc. Set to '' to disable rate limiting."
         ),
     )
 
@@ -129,13 +174,49 @@ class Settings(BaseSettings):
         return self.parsed_data_roots()
 
     # ------------------------------------------------------------------
-    # Helpers
+    # Validators
     # ------------------------------------------------------------------
 
     @field_validator("cors_origins", mode="before")
     @classmethod
     def _strip_cors(cls, v: Any) -> Any:
         return v.strip() if isinstance(v, str) else v
+
+    @model_validator(mode="after")
+    def _production_safety_checks(self) -> "Settings":
+        """Enforce production-safe defaults when ARRO_SERVER_ENV=production.
+
+        Raises ValueError (caught by pydantic as a validation error) if:
+        - CORS is still the wildcard '*'
+        - API key is not set
+        - cors_allow_credentials=True with cors_origins='*'
+        """
+        if self.cors_allow_credentials and self.cors_origins_list() == ["*"]:
+            raise ValueError(
+                "cors_allow_credentials=True is incompatible with cors_origins='*'. "
+                "Set ARRO_SERVER_CORS_ORIGINS to explicit origin(s)."
+            )
+
+        if self.env == "production":
+            if self.cors_origins_list() == ["*"]:
+                raise ValueError(
+                    "ARRO_SERVER_CORS_ORIGINS must not be '*' in production. "
+                    "Set it to your frontend origin(s), e.g. "
+                    "ARRO_SERVER_CORS_ORIGINS=https://app.example.com"
+                )
+            if not (self.api_key or "").strip():
+                raise ValueError(
+                    "ARRO_SERVER_API_KEY must be set in production. "
+                    "Generate one with: openssl rand -hex 32"
+                )
+            # Force JSON logging in production unless explicitly overridden.
+            object.__setattr__(self, "log_json", True)
+
+        return self
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
 
     def cors_origins_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
