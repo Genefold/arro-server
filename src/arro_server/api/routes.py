@@ -31,6 +31,7 @@ GET  /api/datasets/{id}/spot/subgraphs/motives
 GET  /api/prompts/warm                       -- build aspace+gl, return index stats
 GET  /api/prompts/lambdas                    -- eigenvalue distribution for prompt corpus
 GET  /api/prompts/graph_laplacian            -- GL metadata for prompt corpus
+GET  /api/prompts/audit                      -- full audit payload: degree stats, Fiedler, PCA 2D
 POST /api/prompts/search                     -- LEAF kaban semantic search
 """
 
@@ -463,7 +464,7 @@ def prompt_warm() -> dict[str, Any]:
     tuner-optimised eps & k, and returns index statistics.
     Safe to call repeatedly — the singleton is only built once per process.
     """
-    engine = PromptSearchEngine.get()
+    engine    = PromptSearchEngine.get()
     nclusters = int(engine.aspace.nclusters)
     nitems    = int(engine.aspace.nitems)
     nfeatures = int(engine.aspace.nfeatures)
@@ -493,10 +494,10 @@ def prompt_lambdas() -> dict[str, Any]:
     lam      = [float(v) for v in engine.aspace.lambdas()]
     lam_sort = [[float(v), int(i)] for v, i in engine.aspace.lambdas_sorted()]
     return {
-        "nitems":          engine.aspace.nitems,
-        "nclusters":       engine.aspace.nclusters,
-        "lambdas":         lam,
-        "lambdas_sorted":  lam_sort,
+        "nitems":         engine.aspace.nitems,
+        "nclusters":      engine.aspace.nclusters,
+        "lambdas":        lam,
+        "lambdas_sorted": lam_sort,
     }
 
 
@@ -516,6 +517,160 @@ def prompt_graph_laplacian() -> dict[str, Any]:
         "nnodes":       nnodes,
         "shape":        gl_shape,
         "graph_params": engine.gl.graph_params,
+    }
+
+
+@router.get("/prompts/audit")
+def prompt_audit(
+    pca_sample: int = Query(2000, ge=100, le=20000,
+        description="Max number of nodes to include in the PCA 2D scatter. "
+                    "Full 20k is ~4 MB JSON; 2000 is enough for the overview chart."),
+) -> dict[str, Any]:
+    """Full Audit Layer payload — mirrors the dataset inspection cells in the notebook.
+
+    Heavy computation runs once; results are NOT cached across requests (the
+    engine singleton already holds aspace+gl in RAM, so this is CPU-only).
+
+    Returns
+    -------
+    index_stats       : nitems, nfeatures, nclusters, graph_params
+    lambdas_stats     : min, max, mean, median, p25, p75, p95, full array
+    degree_stats      : min, max, mean, std, cv, p10, p25, p50, p75, p90,
+                        hub_count, hub_fraction, tail_count, tail_fraction
+    fiedler           : fiedler_value, spectral_gap, connectivity_label
+    gl_csr            : nnz, n_edges, sparsity
+    scatter_pca       : list of {x, y, lambda, degree, id} for the UI scatter plot
+                        (sampled to pca_sample points, stratified by lambda percentile)
+    pca_variance      : [pc1_variance_ratio, pc2_variance_ratio]
+    """
+    import scipy.sparse as sp
+    import scipy.sparse.linalg as spla
+    from sklearn.decomposition import PCA
+
+    engine = PromptSearchEngine.get()
+    lam    = np.array(engine.aspace.lambdas(), dtype=np.float64)
+
+    # ── GL → scipy CSR ──────────────────────────────────────────────────────
+    raw = engine.gl.to_csr()
+    try:
+        gl_shape_tuple = engine.gl.shape
+    except TypeError:
+        n = engine.gl.nnodes
+        gl_shape_tuple = (n, n)
+    L = sp.csr_matrix(
+        (np.asarray(raw[0]), np.asarray(raw[1]), np.asarray(raw[2])),
+        shape=gl_shape_tuple,
+    )
+    n_nodes  = L.shape[0]
+    nnz      = int(L.nnz)
+    n_edges  = (nnz - n_nodes) // 2
+    sparsity = 1.0 - nnz / (n_nodes * n_nodes)
+    degrees  = np.array(L.diagonal(), dtype=np.float64)
+
+    # ── lambda stats ────────────────────────────────────────────────────────
+    lp = lambda p: float(np.percentile(lam, p))
+    lambdas_stats = {
+        "min":    float(lam.min()),
+        "max":    float(lam.max()),
+        "mean":   float(lam.mean()),
+        "median": float(np.median(lam)),
+        "p25":    lp(25), "p60": lp(60), "p75": lp(75), "p95": lp(95),
+        "values": lam.tolist(),          # full 20k array for histogram
+    }
+
+    # ── degree stats ────────────────────────────────────────────────────────
+    dp = lambda p: float(np.percentile(degrees, p))
+    p10d, p90d = dp(10), dp(90)
+    hub_count  = int((degrees > p90d).sum())
+    tail_count = int((degrees < p10d).sum())
+    degree_stats = {
+        "min":           float(degrees.min()),
+        "max":           float(degrees.max()),
+        "mean":          float(degrees.mean()),
+        "std":           float(degrees.std()),
+        "cv":            float(degrees.std() / (degrees.mean() + 1e-9)),
+        "p10":           p10d, "p25": dp(25), "p50": dp(50),
+        "p75":           dp(75), "p90": p90d,
+        "hub_count":     hub_count,
+        "hub_fraction":  round(hub_count  / n_nodes * 100, 2),
+        "tail_count":    tail_count,
+        "tail_fraction": round(tail_count / n_nodes * 100, 2),
+    }
+
+    # ── Fiedler (algebraic connectivity) ──────────────────────────────────
+    try:
+        diag_d     = np.where(degrees > 1e-12, degrees, 1e-12)
+        d_inv_sqrt = sp.diags(1.0 / np.sqrt(diag_d))
+        L_norm     = d_inv_sqrt @ L @ d_inv_sqrt
+        eigs       = spla.eigsh(L_norm, k=6, which="SM",
+                                return_eigenvectors=False, tol=1e-5, maxiter=3000)
+        eigs_s     = sorted(np.real(eigs))
+        fiedler_v  = max(0.0, eigs_s[1])
+        spec_gap   = eigs_s[2] - eigs_s[1] if len(eigs_s) > 2 else 0.0
+    except Exception:
+        fiedler_v, spec_gap = 0.0, 0.0
+
+    def _fiedler_label(f: float) -> str:
+        if f < 0.01:  return "Near-disconnected (multiple isolated clusters)"
+        if f < 0.05:  return "Weakly connected (eps may be too tight)"
+        if f < 0.20:  return "Moderately connected"
+        return "Well connected"
+
+    fiedler = {
+        "value":             round(fiedler_v, 6),
+        "spectral_gap":      round(spec_gap,  6),
+        "connectivity_label": _fiedler_label(fiedler_v),
+    }
+
+    # ── PCA 2D scatter (sampled, stratified by lambda percentile) ──────────
+    sample_n = min(pca_sample, n_nodes)
+    # stratified sampling: split into 4 lambda quantile buckets, sample evenly
+    quartiles  = np.percentile(lam, [25, 50, 75])
+    buckets    = np.digitize(lam, quartiles)          # 0,1,2,3
+    per_bucket = max(1, sample_n // 4)
+    idx_parts  = []
+    for b in range(4):
+        pool = np.where(buckets == b)[0]
+        if len(pool) > 0:
+            chosen = np.random.default_rng(42).choice(
+                pool, size=min(per_bucket, len(pool)), replace=False
+            )
+            idx_parts.append(chosen)
+    sample_idx = np.concatenate(idx_parts)[:sample_n]
+
+    embs_sample = engine.embs[sample_idx].astype(np.float32)
+    pca         = PCA(n_components=2, random_state=42)
+    xy          = pca.fit_transform(embs_sample)
+    var         = pca.explained_variance_ratio_
+
+    scatter = [
+        {
+            "x":      round(float(xy[i, 0]), 5),
+            "y":      round(float(xy[i, 1]), 5),
+            "lambda": round(float(lam[sample_idx[i]]), 6),
+            "degree": round(float(degrees[sample_idx[i]]), 4),
+            "id":     engine.ids[sample_idx[i]],
+        }
+        for i in range(len(sample_idx))
+    ]
+
+    return {
+        "index_stats": {
+            "nitems":    int(engine.aspace.nitems),
+            "nfeatures": int(engine.aspace.nfeatures),
+            "nclusters": int(engine.aspace.nclusters),
+            "graph_params": engine.gl.graph_params,
+        },
+        "lambdas_stats":  lambdas_stats,
+        "degree_stats":   degree_stats,
+        "fiedler":        fiedler,
+        "gl_csr": {
+            "nnz":      nnz,
+            "n_edges":  n_edges,
+            "sparsity": round(sparsity, 8),
+        },
+        "scatter_pca":    scatter,
+        "pca_variance":   [round(float(v), 4) for v in var],
     }
 
 
