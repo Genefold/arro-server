@@ -228,6 +228,10 @@ class Settings(BaseSettings):
         Accepts both:
           - ``label=path`` pairs  (explicit label)
           - bare ``path`` entries (label auto-derived from ``Path(path).stem``)
+
+        Paths are resolved to absolute paths.  When two bare paths share the
+        same stem, the second (and subsequent) entries receive a numeric suffix
+        appended with a hyphen, e.g. ``shared`` and ``shared-1``.
         """
         roots: dict[str, Path] = {}
         for part in self.data_roots.split(","):
@@ -236,12 +240,20 @@ class Settings(BaseSettings):
                 continue
             if "=" in part:
                 label, _, path = part.partition("=")
-                roots[label.strip()] = Path(path.strip())
+                resolved = Path(path.strip()).resolve()
+                roots[label.strip()] = resolved
             else:
                 # Bare path — derive label from the final directory component.
                 p = Path(part)
-                label = p.stem or p.name or part
-                roots[label] = p
+                base_label = p.stem or p.name or part
+                resolved = p.resolve()
+                # Deduplicate: if base_label already taken, append -1, -2, ...
+                label = base_label
+                suffix = 1
+                while label in roots:
+                    label = f"{base_label}-{suffix}"
+                    suffix += 1
+                roots[label] = resolved
         return roots
 
     def effective_index_store(self) -> Path:
