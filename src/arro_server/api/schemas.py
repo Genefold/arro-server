@@ -62,6 +62,15 @@ class SearchBatchRequest(BaseModel):
     tau: float = Field(1.0, description="Taumode tau parameter.")
 
 
+# --- add after the existing SearchBatchRequest class ---
+
+class PromptSearchRequest(BaseModel):
+    """Body for POST /api/prompts/search — semantic prompt search with MMR rerank."""
+    vector: list[float] = Field(..., description="768-dim query vector, already embedded.")
+    k: int              = Field(10, ge=1, le=100, description="Number of results.")
+    alpha: float        = Field(0.6, ge=0.0, le=1.0, description="Cosine vs spectral blend.")
+
+    
 class IndexBuildRequest(BaseModel):
     """Optional body for POST /datasets/{id}/index.
 

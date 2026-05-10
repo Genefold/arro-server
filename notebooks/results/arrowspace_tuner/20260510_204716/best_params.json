@@ -1,0 +1,20 @@
+{
+  "trial": 7,
+  "score": 1.9695818943228132,
+  "params": {
+    "k": 30,
+    "eps": 1.9915820614814521,
+    "tau": 0.5985664398984631
+  },
+  "user_attrs": {
+    "fiedler": 0.62416998,
+    "mrr_proxy": 2.671022,
+    "n_probe": 50,
+    "n_sample": 5000,
+    "tau": 0.598566,
+    "var_lambda": 0.02908386
+  },
+  "timestamp": "20260510_204716",
+  "study_name": "arrowspace_tuner",
+  "n_trials": 15
+}

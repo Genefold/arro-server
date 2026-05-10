@@ -44,6 +44,7 @@ from ..settings import Settings, get_settings
 from ..slicing import enforce_window_budget, parse_slice, trailing_product
 from ..storage import StorageRegistry, get_registry
 from ..storage.zarr_fs import zarr_available
+from ..search_engine import PromptSearchEngine
 from .schemas import (
     IndexBuildRequest,
     SearchBatchRequest,
@@ -51,10 +52,12 @@ from .schemas import (
     SearchHybridRequest,
     SearchLinearRequest,
     SearchRequest,
+    PromptSearchRequest,
 )
 from .serializers import array_to_payload
 
 router = APIRouter(prefix="/api")
+_engine = None
 
 
 def _registry() -> StorageRegistry:
@@ -446,3 +449,21 @@ def dataset_spot_subg_motives(
 ) -> dict[str, Any]:
     data = adapter.spot_subg_motives(dataset_id)
     return {"id": dataset_id, "backend": adapter.backend, **data}
+
+
+# Prompt semantic search (LEAF kaban engine)
+@router.post("/prompts/search")
+def prompt_search(body: PromptSearchRequest) -> dict:
+    """
+    Semantic search over the 20k prompt corpus.
+    Input:  768-dim nomic-embed-text-v1.5 vector (already embedded by caller).
+    Output: top-k prompt JSON records with _score and _salience fields added.
+    """
+    import numpy as np
+    engine  = PromptSearchEngine.get()
+    results = engine.search(
+        query_vec=np.array(body.vector, dtype=np.float64),
+        k=body.k,
+        alpha=body.alpha,
+    )
+    return {"count": len(results), "results": results}
