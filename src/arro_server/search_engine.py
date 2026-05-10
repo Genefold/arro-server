@@ -6,8 +6,8 @@ from pathlib import Path
 from arrowspace import ArrowSpaceBuilder
 
 _ROOT     = Path(__file__).parents[2]
-_EMBS_DIR = _ROOT / "data" / "nomic_embs"
-_DATASET  = _ROOT / "data" / "dataset.json"
+_EMBS_DIR = _ROOT / "data" / "nomic_embs"       
+_DATASET  = _ROOT / "data" / "dataset.json"  
 _DIM      = 768
 W_UP, W_LK, W_REP, W_VIEW = 0.35, 0.35, 0.20, 0.10
 SAL_WEIGHT = 0.30
@@ -22,7 +22,8 @@ def _norm(arr: np.ndarray) -> np.ndarray:
 def _load_best_params() -> dict:
     tuner_dir = _ROOT / "notebooks" / "results" / "arrowspace_tuner"
     latest    = sorted(tuner_dir.iterdir())[-1] / "best_params.json"
-    return json.loads(latest.read_text())
+    raw = json.loads(latest.read_text())
+    return raw.get("params", raw)   # unwraps {"k":30,"eps":1.99,"tau":0.598}
 
 
 class PromptSearchEngine:
