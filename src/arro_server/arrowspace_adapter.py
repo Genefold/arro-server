@@ -413,9 +413,16 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
 
     def graph_laplacian_info(self, dataset_id: str) -> dict[str, Any]:
         entry = self._get_entry(dataset_id)
+        nnodes = int(entry.gl.nnodes)
+        # gl.shape may be a property/method returning a non-iterable on some
+        # arrowspace versions; guard with try/except and fall back to (nnodes, nnodes).
+        try:
+            gl_shape = list(entry.gl.shape)
+        except TypeError:
+            gl_shape = [nnodes, nnodes]
         return {
-            "nnodes": int(entry.gl.nnodes),
-            "shape": list(entry.gl.shape),
+            "nnodes": nnodes,
+            "shape": gl_shape,
             "graph_params": entry.gl.graph_params,
         }
 
@@ -524,12 +531,19 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
 
     def stats_data(self, dataset_id: str) -> dict[str, Any]:
         entry = self._get_entry(dataset_id)
+        nnodes = int(entry.gl.nnodes)
+        # gl.shape may be a non-iterable built-in on some arrowspace versions;
+        # guard with try/except and fall back to (nnodes, nnodes).
+        try:
+            gl_shape = list(entry.gl.shape)
+        except TypeError:
+            gl_shape = [nnodes, nnodes]
         return {
             "nitems": entry.nitems,
             "nfeatures": entry.nfeatures,
             "nclusters": entry.nclusters,
-            "gl_nodes": int(entry.gl.nnodes),
-            "gl_shape": list(entry.gl.shape),
+            "gl_nodes": nnodes,
+            "gl_shape": gl_shape,
         }
 
     def sidecar_manifold(self, dataset_path: Path) -> dict[str, Any]:
@@ -573,4 +587,7 @@ def load() -> ArrowSpaceAdapter:
 
 
 def reset_adapter_cache() -> None:
-    load.cache_clear()
+    # Guard: load() may be monkey-patched in tests to a plain function
+    # that does not have .cache_clear(). Only call it when present.
+    if hasattr(load, "cache_clear"):
+        load.cache_clear()

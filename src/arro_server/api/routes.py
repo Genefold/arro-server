@@ -34,7 +34,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from .. import __version__
 from ..arrowspace_adapter import DEFAULT_GRAPH_PARAMS, ArrowSpaceAdapter, _ArrowSpaceAdapter
@@ -271,21 +271,23 @@ def build_index(
 ) -> dict[str, Any]:
     """Build (or rebuild) the ArrowSpace graph-Laplacian index.
 
-    FIX: response now returns a flat dict — graph_params at the top level
-    alongside nitems/nfeatures/nclusters, not double-nested.
+    FIX: catch ValueError from adapter (e.g. 1-D array) and return 422.
+    FIX: response returns graph_params flat alongside nitems/nfeatures/nclusters.
     """
     h = reg.open(dataset_id)
     rs = parse_slice(None, h.summary.shape, offset=0, limit=h.summary.shape[0])
     arr = h.read_window(rs)
     index_store = Path(settings.index_store).expanduser().resolve()
     effective_params = body.graph_params or DEFAULT_GRAPH_PARAMS
-    meta = adapter.build_index(
-        dataset_id=dataset_id,
-        array=arr,
-        index_store=index_store,
-        graph_params=effective_params,
-    )
-    # FIX: graph_params is a flat peer of nitems/nfeatures/nclusters
+    try:
+        meta = adapter.build_index(
+            dataset_id=dataset_id,
+            array=arr,
+            index_store=index_store,
+            graph_params=effective_params,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {
         "id": dataset_id,
         "built": True,
