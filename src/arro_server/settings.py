@@ -76,7 +76,10 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------------
     cors_origins: str = Field(
         default="*",
-        description="Comma-separated allowed CORS origins. Use '*' for development only.",
+        description=(
+            "Comma-separated allowed CORS origins. "
+            "Use '*' for development only — restrict in production."
+        ),
     )
 
     # ------------------------------------------------------------------
@@ -87,11 +90,34 @@ class Settings(BaseSettings):
         description="Mount the built-in Vanilla JS UI at /ui.",
     )
 
+    frontend_dir: str = Field(
+        default="",
+        description="Override path to the frontend static directory (optional).",
+    )
+
     max_window: int = Field(
         default=10_000,
         ge=1,
         description="Hard cap on number of rows returned per data-window request.",
     )
+
+    default_window: int = Field(
+        default=1_000,
+        ge=1,
+        description=(
+            "Default number of rows returned by GET /data when 'limit' is not supplied. "
+            "Must be <= max_window."
+        ),
+    )
+
+    # ------------------------------------------------------------------
+    # Resolved roots (computed property, not a setting field)
+    # ------------------------------------------------------------------
+
+    @property
+    def resolved_roots(self) -> dict[str, Path]:
+        """Alias kept for backwards compatibility with health endpoint."""
+        return self.parsed_data_roots()
 
     # ------------------------------------------------------------------
     # Helpers
@@ -122,8 +148,6 @@ class Settings(BaseSettings):
 
     def effective_index_store(self) -> Path:
         """Return arrowspace_index_store, falling back to index_store (legacy)."""
-        # If the user set the canonical var it will differ from the default;
-        # otherwise we honour the legacy var.
         default = Path("./storage")
         if self.arrowspace_index_store != default:
             return self.arrowspace_index_store

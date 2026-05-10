@@ -5,28 +5,29 @@ Dataset IDs use '--' as the root/path separator (e.g. 'main--matrix').
 
 Endpoint map
 ------------
-GET  /api/health
-GET  /api/datasets
-GET  /api/datasets/{id}/metadata
-GET  /api/datasets/{id}/data
-GET  /api/datasets/{id}/slice
-GET  /api/datasets/{id}/stats
-GET  /api/datasets/{id}/manifold
-GET  /api/datasets/{id}/search               -- keyword (sidecar)
-POST /api/datasets/{id}/index                -- build index
-GET  /api/datasets/{id}/lambdas              -- eigenvalue distribution
-GET  /api/datasets/{id}/graph_laplacian      -- GL metadata
-GET  /api/datasets/{id}/items                -- all items from index
-GET  /api/datasets/{id}/items/{n}            -- single item
-POST /api/datasets/{id}/search               -- spectral vector search
-POST /api/datasets/{id}/search/energy        -- energy vector search
-POST /api/datasets/{id}/search/hybrid        -- hybrid vector search
-POST /api/datasets/{id}/search/linear        -- linear sorted search
-POST /api/datasets/{id}/search/batch         -- batch vector search
-GET  /api/datasets/{id}/spot/motives/eigen
-GET  /api/datasets/{id}/spot/motives/energy
-GET  /api/datasets/{id}/spot/subgraphs/centroids
-GET  /api/datasets/{id}/spot/subgraphs/motives
+GET    /api/health
+GET    /api/datasets
+GET    /api/datasets/{id}/metadata
+GET    /api/datasets/{id}/data
+GET    /api/datasets/{id}/slice
+GET    /api/datasets/{id}/stats
+GET    /api/datasets/{id}/manifold
+GET    /api/datasets/{id}/search               -- keyword (sidecar)
+POST   /api/datasets/{id}/index                -- build index
+DELETE /api/datasets/{id}/index                -- evict + delete index
+GET    /api/datasets/{id}/lambdas              -- eigenvalue distribution
+GET    /api/datasets/{id}/graph_laplacian      -- GL metadata
+GET    /api/datasets/{id}/items                -- all items from index
+GET    /api/datasets/{id}/items/{n}            -- single item
+POST   /api/datasets/{id}/search               -- spectral vector search
+POST   /api/datasets/{id}/search/energy        -- energy vector search
+POST   /api/datasets/{id}/search/hybrid        -- hybrid vector search
+POST   /api/datasets/{id}/search/linear        -- linear sorted search
+POST   /api/datasets/{id}/search/batch         -- batch vector search
+GET    /api/datasets/{id}/spot/motives/eigen
+GET    /api/datasets/{id}/spot/motives/energy
+GET    /api/datasets/{id}/spot/subgraphs/centroids
+GET    /api/datasets/{id}/spot/subgraphs/motives
 """
 
 from __future__ import annotations
@@ -72,13 +73,18 @@ def _arrowspace() -> ArrowSpaceAdapter:
 
 @router.get("/health")
 def health(settings: Settings = Depends(get_settings)) -> dict[str, Any]:
+    adapter = load_arrowspace()
+    indexed: list[str] = []
+    if isinstance(adapter, _ArrowSpaceAdapter):
+        indexed = adapter.indexed_datasets()
     return {
         "status": "ok",
         "version": __version__,
         "zarr_available": zarr_available(),
-        "arrowspace_backend": load_arrowspace().backend,
-        "arrowspace_available": load_arrowspace().available,
+        "arrowspace_backend": adapter.backend,
+        "arrowspace_available": adapter.available,
         "data_roots": list(settings.resolved_roots.keys()),
+        "indexed_datasets": indexed,
     }
 
 
@@ -269,15 +275,11 @@ def build_index(
     settings: Settings = Depends(get_settings),
     adapter: ArrowSpaceAdapter = Depends(_arrowspace),
 ) -> dict[str, Any]:
-    """Build (or rebuild) the ArrowSpace graph-Laplacian index.
-
-    FIX: catch ValueError from adapter (e.g. 1-D array) and return 422.
-    FIX: response returns graph_params flat alongside nitems/nfeatures/nclusters.
-    """
+    """Build (or rebuild) the ArrowSpace graph-Laplacian index."""
     h = reg.open(dataset_id)
     rs = parse_slice(None, h.summary.shape, offset=0, limit=h.summary.shape[0])
     arr = h.read_window(rs)
-    index_store = Path(settings.index_store).expanduser().resolve()
+    index_store = settings.effective_index_store()
     effective_params = body.graph_params or DEFAULT_GRAPH_PARAMS
     try:
         meta = adapter.build_index(
@@ -296,6 +298,22 @@ def build_index(
         "nfeatures": meta["nfeatures"],
         "nclusters": meta["nclusters"],
     }
+
+
+@router.delete("/datasets/{dataset_id}/index")
+def delete_index(
+    dataset_id: str,
+    settings: Settings = Depends(get_settings),
+    adapter: ArrowSpaceAdapter = Depends(_arrowspace),
+) -> dict[str, Any]:
+    """Evict the ArrowSpace index from the LRU cache, remove Parquet files
+    and remove the manifest entry.
+
+    Safe to call even if no index exists (idempotent — returns found=False).
+    """
+    index_store = settings.effective_index_store()
+    found = adapter.delete_index(dataset_id, index_store)
+    return {"id": dataset_id, "deleted": found}
 
 
 # ---------------------------------------------------------------------------
@@ -352,8 +370,6 @@ def dataset_get_item(
 
 # ---------------------------------------------------------------------------
 # Vector search variants
-# FIX: all POST /search* endpoints now use typed Pydantic models instead of
-# dict[str, Any] so FastAPI returns 422 for missing/wrong fields automatically.
 # ---------------------------------------------------------------------------
 
 

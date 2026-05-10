@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+importlib_import = None
 import importlib.resources
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -14,15 +16,35 @@ from .settings import Settings, get_settings
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        # Pre-load persisted ArrowSpace indices so they survive restarts.
+        from .arrowspace_adapter import load as load_arrowspace
+        from .arrowspace_adapter import _ArrowSpaceAdapter
+
+        adapter = load_arrowspace()
+        if isinstance(adapter, _ArrowSpaceAdapter):
+            index_store = settings.effective_index_store()
+            n = adapter.load_persisted(index_store)
+            if n:
+                import logging
+                logging.getLogger(__name__).info(
+                    "Startup: pre-loaded %d persisted ArrowSpace index(es) from %s",
+                    n, index_store,
+                )
+        yield
+
     app = FastAPI(
         title="arro-server",
         version=__version__,
         description="Serve Zarr v3 datasets and ArrowSpace metadata over HTTP.",
+        lifespan=lifespan,
     )
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=settings.cors_origins,
-        allow_methods=["GET", "POST"],
+        allow_origins=settings.cors_origins_list(),
+        allow_methods=["GET", "POST", "DELETE"],
         allow_headers=["*"],
     )
     app.include_router(api_router)
