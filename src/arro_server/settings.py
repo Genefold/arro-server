@@ -35,12 +35,13 @@ class Settings(BaseSettings):
     )
 
     # ------------------------------------------------------------------
-    # Data roots  (label=path pairs, comma-separated)
+    # Data roots  (label=path pairs OR bare paths, comma-separated)
     # e.g.  ARRO_SERVER_DATA_ROOTS=main=/data/zarr,aux=/data/aux
+    # or    ARRO_SERVER_DATA_ROOTS=/data/zarr,/data/aux  (label auto-derived from stem)
     # ------------------------------------------------------------------
     data_roots: str = Field(
         default="",
-        description="Comma-separated label=path pairs for Zarr dataset roots.",
+        description="Comma-separated label=path pairs (or bare paths) for Zarr dataset roots.",
     )
 
     # ------------------------------------------------------------------
@@ -222,18 +223,25 @@ class Settings(BaseSettings):
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 
     def parsed_data_roots(self) -> dict[str, Path]:
-        """Return {label: Path} from the DATA_ROOTS string."""
+        """Return {label: Path} from the DATA_ROOTS string.
+
+        Accepts both:
+          - ``label=path`` pairs  (explicit label)
+          - bare ``path`` entries (label auto-derived from ``Path(path).stem``)
+        """
         roots: dict[str, Path] = {}
         for part in self.data_roots.split(","):
             part = part.strip()
             if not part:
                 continue
-            if "=" not in part:
-                raise ValueError(
-                    f"DATA_ROOTS entry '{part}' must be 'label=path'."
-                )
-            label, _, path = part.partition("=")
-            roots[label.strip()] = Path(path.strip())
+            if "=" in part:
+                label, _, path = part.partition("=")
+                roots[label.strip()] = Path(path.strip())
+            else:
+                # Bare path — derive label from the final directory component.
+                p = Path(part)
+                label = p.stem or p.name or part
+                roots[label] = p
         return roots
 
     def effective_index_store(self) -> Path:

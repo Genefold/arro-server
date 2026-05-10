@@ -294,9 +294,10 @@ async def build_index(
     Rate-limited per IP (see ARRO_SERVER_RATE_LIMIT_WRITE).
     """
     # Apply rate limit if slowapi limiter is available.
+    # NOTE: slowapi's _check_request_limit is synchronous — do NOT await it.
     limiter = _get_limiter(request)
     if limiter and settings.rate_limit_write:
-        await limiter._check_request_limit(  # type: ignore[attr-defined]
+        limiter._check_request_limit(  # type: ignore[attr-defined]
             request, build_index, settings.rate_limit_write
         )
 

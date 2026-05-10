@@ -303,8 +303,10 @@ class _UnavailableAdapter(ArrowSpaceAdapter):
     def build_index(self, dataset_id, array, index_store, graph_params=None):
         raise OptionalDependencyMissing("arrowspace", "build_index")
 
-    def delete_index(self, dataset_id, index_store):
-        raise OptionalDependencyMissing("arrowspace", "delete_index")
+    def delete_index(self, dataset_id, index_store) -> bool:
+        # No index can exist when arrowspace is unavailable — return False gracefully
+        # rather than raising, so DELETE /index always returns 200 {"deleted": false}.
+        return False
 
     def indexed_datasets(self) -> list[str]:
         return []
@@ -481,8 +483,7 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
             dataset_id, arr64.shape, gp,
         )
 
-        # Correct API: build_and_store(graph_params, items) -> ArrowSpace
-        # No storage_path / dataset_name kwargs — those do not exist.
+        # Correct API: ArrowSpaceBuilder().build_and_store(graph_params, items) -> ArrowSpace
         # The GraphLaplacian is accessed as aspace.gl (not a second return value).
         aspace = self._mod.ArrowSpaceBuilder().build_and_store(gp, arr64)
         gl = aspace.gl
