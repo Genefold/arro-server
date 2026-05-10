@@ -10,27 +10,22 @@ Real arrowspace API (confirmed from package introspection)::
 
     from arrowspace import ArrowSpaceBuilder
 
-    # Build index — returns a single ArrowSpace object (NOT a tuple)
-    aspace = ArrowSpaceBuilder().build_and_store(graph_params, items)
+    # Build index — returns a 2-tuple (ArrowSpace, GraphLaplacian)
+    aspace, gl = ArrowSpaceBuilder().build_and_store(graph_params, items)
 
-    # GraphLaplacian is an attribute on the returned object
-    gl = aspace.gl
-
-    # Reload persisted index without recomputing
-    aspace = arrowspace.load_arrowspace(
+    # Reload persisted index without recomputing — also returns a 2-tuple
+    aspace, gl = arrowspace.load_arrowspace(
         storage_path="storage/",
         dataset_name="dataset_{uuid}",
         graph_params={...},
         energy=False,
     )
-    gl = aspace.gl
 
 ArrowSpace object public surface::
 
     aspace.nitems          int
     aspace.nfeatures       int
     aspace.nclusters       int
-    aspace.gl              GraphLaplacian
     aspace.lambdas()       -> np.ndarray          eigenvalue vector
     aspace.lambdas_sorted()-> List[(float, int)]  sorted (value, original_index)
     aspace.search(vec, gl, tau)             -> List[(int, float)]
@@ -56,7 +51,8 @@ GraphLaplacian object public surface::
 Persistence
 -----------
 On every ``build_index()`` call the adapter:
-  1. Calls ``ArrowSpaceBuilder().build_and_store(graph_params, items)``.
+  1. Calls ``ArrowSpaceBuilder().build_and_store(graph_params, items)``
+     which returns ``(aspace, gl)`` — a 2-tuple.
   2. Persists the GraphLaplacian as Zarr v3 CSR arrays under
      ``<index_store>/<slug>/`` via ``_persist_csr()``.
   3. Records ``{dataset_id -> slug}`` in
@@ -64,9 +60,9 @@ On every ``build_index()`` call the adapter:
 
 On ``load()`` (server startup) the adapter:
   1. Reads ``index_manifest.json`` (if present).
-  2. Calls ``arrowspace.load_arrowspace()`` for every known entry and
-     pre-populates the LRU cache — indices survive restarts without
-     recomputing.
+  2. Calls ``arrowspace.load_arrowspace()`` for every known entry —
+     also returns ``(aspace, gl)`` — and pre-populates the LRU cache.
+     Indices survive restarts without recomputing.
 """
 
 from __future__ import annotations
@@ -483,10 +479,8 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
             dataset_id, arr64.shape, gp,
         )
 
-        # Correct API: ArrowSpaceBuilder().build_and_store(graph_params, items) -> ArrowSpace
-        # The GraphLaplacian is accessed as aspace.gl (not a second return value).
-        aspace = self._mod.ArrowSpaceBuilder().build_and_store(gp, arr64)
-        gl = aspace.gl
+        # build_and_store returns a 2-tuple (ArrowSpace, GraphLaplacian)
+        aspace, gl = self._mod.ArrowSpaceBuilder().build_and_store(gp, arr64)
 
         entry = _IndexEntry(
             aspace=aspace,
@@ -534,13 +528,13 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
                 continue
             try:
                 log.info("Loading persisted index '%s' from slug '%s'", dataset_id, slug)
-                aspace = self._mod.load_arrowspace(
+                # load_arrowspace also returns a 2-tuple (ArrowSpace, GraphLaplacian)
+                aspace, gl = self._mod.load_arrowspace(
                     storage_path=str(index_store),
                     dataset_name=slug,
                     graph_params=DEFAULT_GRAPH_PARAMS,
                     energy=False,
                 )
-                gl = aspace.gl
                 entry = _IndexEntry(
                     aspace=aspace,
                     gl=gl,
