@@ -27,6 +27,10 @@ GET  /api/datasets/{id}/spot/motives/eigen
 GET  /api/datasets/{id}/spot/motives/energy
 GET  /api/datasets/{id}/spot/subgraphs/centroids
 GET  /api/datasets/{id}/spot/subgraphs/motives
+
+GET  /api/prompts/warm                       -- build aspace+gl, return index stats
+GET  /api/prompts/lambdas                    -- eigenvalue distribution for prompt corpus
+GET  /api/prompts/graph_laplacian            -- GL metadata for prompt corpus
 POST /api/prompts/search                     -- LEAF kaban semantic search
 """
 
@@ -447,8 +451,72 @@ def dataset_spot_subg_motives(
 
 
 # ---------------------------------------------------------------------------
-# LEAF kaban — Prompt semantic search
+# LEAF kaban — Prompt corpus index + inspection + search
 # ---------------------------------------------------------------------------
+
+
+@router.get("/prompts/warm")
+def prompt_warm() -> dict[str, Any]:
+    """Initialise (or confirm already-initialised) PromptSearchEngine.
+
+    Loads embeddings, builds the ArrowSpace graph-Laplacian index from the
+    tuner-optimised eps & k, and returns index statistics.
+    Safe to call repeatedly — the singleton is only built once per process.
+    """
+    engine = PromptSearchEngine.get()
+    nclusters = int(engine.aspace.nclusters)
+    nitems    = int(engine.aspace.nitems)
+    nfeatures = int(engine.aspace.nfeatures)
+    nnodes    = int(engine.gl.nnodes)
+    try:
+        gl_shape = list(engine.gl.shape)
+    except TypeError:
+        gl_shape = [nnodes, nnodes]
+    return {
+        "status":    "ready",
+        "nitems":    nitems,
+        "nfeatures": nfeatures,
+        "nclusters": nclusters,
+        "gl_nnodes": nnodes,
+        "gl_shape":  gl_shape,
+    }
+
+
+@router.get("/prompts/lambdas")
+def prompt_lambdas() -> dict[str, Any]:
+    """Return the full eigenvalue spectrum of the prompt corpus graph-Laplacian.
+
+    Triggers a warm-up build if the engine has not been initialised yet.
+    Useful for inspecting spectral structure and validating index quality.
+    """
+    engine   = PromptSearchEngine.get()
+    lam      = [float(v) for v in engine.aspace.lambdas()]
+    lam_sort = [[float(v), int(i)] for v, i in engine.aspace.lambdas_sorted()]
+    return {
+        "nitems":          engine.aspace.nitems,
+        "nclusters":       engine.aspace.nclusters,
+        "lambdas":         lam,
+        "lambdas_sorted":  lam_sort,
+    }
+
+
+@router.get("/prompts/graph_laplacian")
+def prompt_graph_laplacian() -> dict[str, Any]:
+    """Return graph-Laplacian metadata for the prompt corpus index.
+
+    Triggers a warm-up build if the engine has not been initialised yet.
+    """
+    engine = PromptSearchEngine.get()
+    nnodes = int(engine.gl.nnodes)
+    try:
+        gl_shape = list(engine.gl.shape)
+    except TypeError:
+        gl_shape = [nnodes, nnodes]
+    return {
+        "nnodes":       nnodes,
+        "shape":        gl_shape,
+        "graph_params": engine.gl.graph_params,
+    }
 
 
 @router.post("/prompts/search")
