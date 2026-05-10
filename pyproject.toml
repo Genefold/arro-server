@@ -24,6 +24,7 @@ dependencies = [
 zarr = ["zarr>=3.0", "fsspec>=2024.2"]
 arrow = ["pyarrow>=15.0"]
 # pip install arrowspace  (repo: https://github.com/tuned-org-uk/pyarrowspace)
+# Task 1.1: renamed extra key from 'pyarrowspace' -> 'arrowspace' to match PyPI package name
 arrowspace = ["arrowspace"]
 dev = [
     "pytest>=8.0",
