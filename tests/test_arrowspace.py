@@ -15,12 +15,16 @@ Design decisions
   files (data.zarr, indices.zarr, indptr.zarr, meta.json) are created both
   via the adapter directly and via the HTTP POST /index endpoint.
 
-Bug fixes inherited from the phase-1 suite
--------------------------------------------
-1. build_index response is flat: graph_params is a top-level key.
-2. POST /search* endpoints use Pydantic models — missing/wrong fields → 422.
-3. arrowspace load() catches Exception (not just ImportError) so a broken
-   __init__.py falls back to sidecar without crashing.
+Implementation notes
+--------------------
+* _persist_csr writes {nitems, nfeatures, nclusters, csr_shape} to meta.json.
+  It does NOT write graph_params — tests assert on csr_shape accordingly.
+* The route handler passes settings.index_store (ARRO_SERVER_INDEX_STORE)
+  as the index_store argument, NOT the zarr data root.  The live_client
+  fixture therefore sets ARRO_SERVER_INDEX_STORE to a dedicated tmp dir so
+  HTTP-level zzarr tests can locate the artifacts.
+* _ArrowSpaceAdapter._slug replaces '/' and '\\' with '__' but leaves '-'
+  untouched: DATASET_ID='main--matrix' -> slug 'main--matrix'.
 """
 
 from __future__ import annotations
@@ -53,6 +57,10 @@ FAKE_HITS = [(i, float(i) * 0.01) for i in range(5)]
 
 DATASET_ID = "main--matrix"
 VECTOR = FIXTURE_ARRAY[0].tolist()  # [0.0, 1.0, 2.0, 3.0]
+
+# Slug produced by _ArrowSpaceAdapter._slug(DATASET_ID):
+# only '/' and '\\' are replaced by '__'; '-' is left untouched.
+DATASET_SLUG = DATASET_ID.replace("/", "__").replace("\\", "__")  # "main--matrix"
 
 # ---------------------------------------------------------------------------
 # Fake arrowspace module
@@ -97,11 +105,7 @@ def _make_fake_gl() -> MagicMock:
 
 
 def _make_fake_arrowspace_module() -> types.ModuleType:
-    """Return a types.ModuleType that mimics the real arrowspace package.
-
-    The fake ArrowSpaceBuilder.build() also writes the expected zzarr
-    persistence files so that tests can assert on their existence.
-    """
+    """Return a types.ModuleType that mimics the real arrowspace package."""
     fake_mod = types.ModuleType("arrowspace")
     aspace = _make_fake_aspace()
     gl = _make_fake_gl()
@@ -145,7 +149,15 @@ def built_adapter(adapter, tmp_path: Path):
 
 
 @pytest.fixture
-def live_client(tmp_zarr_root: Path, fake_mod: types.ModuleType):
+def tmp_index_store(tmp_path: Path) -> Path:
+    """Isolated directory used as ARRO_SERVER_INDEX_STORE for HTTP tests."""
+    d = tmp_path / "index_store"
+    d.mkdir()
+    return d
+
+
+@pytest.fixture
+def live_client(tmp_zarr_root: Path, tmp_index_store: Path, fake_mod: types.ModuleType):
     from arro_server import arrowspace_adapter
     from arro_server import settings as settings_mod
     from arro_server.app import create_app
@@ -155,6 +167,7 @@ def live_client(tmp_zarr_root: Path, fake_mod: types.ModuleType):
 
     os.environ["ARRO_SERVER_DATA_ROOTS"] = f"main={tmp_zarr_root}"
     os.environ["ARRO_SERVER_SERVE_FRONTEND"] = "false"
+    os.environ["ARRO_SERVER_INDEX_STORE"] = str(tmp_index_store)
     settings_mod.reset_settings_cache()
     registry_mod.reset_registry_cache()
     arrowspace_adapter.reset_adapter_cache()
@@ -166,6 +179,7 @@ def live_client(tmp_zarr_root: Path, fake_mod: types.ModuleType):
     sys.modules.pop("arrowspace", None)
     os.environ.pop("ARRO_SERVER_DATA_ROOTS", None)
     os.environ.pop("ARRO_SERVER_SERVE_FRONTEND", None)
+    os.environ.pop("ARRO_SERVER_INDEX_STORE", None)
     settings_mod.reset_settings_cache()
     registry_mod.reset_registry_cache()
     arrowspace_adapter.reset_adapter_cache()
@@ -234,13 +248,19 @@ class TestAdapterBuildIndex:
         assert (slug_dir / "meta.json").exists(), "meta.json missing"
 
     def test_meta_json_content(self, adapter, tmp_path):
-        """meta.json must record nitems, nfeatures, nclusters and graph_params."""
+        """meta.json must record nitems, nfeatures, nclusters and csr_shape.
+
+        Note: _persist_csr writes {nitems, nfeatures, nclusters, csr_shape}.
+        graph_params is NOT persisted to disk — it is returned in the HTTP
+        response body by the route handler from the in-memory graph_params dict.
+        """
         adapter.build_index("test/ds", FIXTURE_ARRAY.copy(), tmp_path)
         slug_dir = tmp_path / "test__ds"
         meta = json.loads((slug_dir / "meta.json").read_text())
         assert meta["nitems"] == NITEMS
         assert meta["nfeatures"] == NFEATURES
-        assert "graph_params" in meta
+        assert "csr_shape" in meta, f"expected csr_shape in meta.json, got keys: {list(meta)}"
+        assert meta["csr_shape"] == [NITEMS, NITEMS]
 
 
 class TestAdapterLambdas:
@@ -532,26 +552,37 @@ class TestIndexLifecycle:
 
     # -----------------------------------------------------------------------
     # zzarr persistence assertions (HTTP level)
+    #
+    # The route passes settings.index_store (ARRO_SERVER_INDEX_STORE) as the
+    # index_store argument.  live_client sets that env var to tmp_index_store.
+    # _ArrowSpaceAdapter._slug(DATASET_ID) = "main--matrix" (only '/' → '__').
+    # Artifacts land at: tmp_index_store / DATASET_SLUG / {data,indices,indptr}.zarr
     # -----------------------------------------------------------------------
 
-    def test_build_index_creates_zzarr_files(self, tmp_zarr_root: Path, live_client: TestClient):
+    def test_build_index_creates_zzarr_files(
+        self, tmp_index_store: Path, live_client: TestClient
+    ):
         """POST /index must create the ArrowSpace index artifacts on disk."""
         live_client.post(f"/api/datasets/{DATASET_ID}/index")
-        # The adapter writes under <data_root>/<dataset_slug>/
-        # Dataset ID "main--matrix" → root is tmp_zarr_root, sub-path "matrix"
-        index_dir = tmp_zarr_root / "matrix" / "_arrowspace_index"
-        assert (index_dir / "data.zarr").exists(), f"data.zarr missing in {index_dir}"
-        assert (index_dir / "indices.zarr").exists(), f"indices.zarr missing in {index_dir}"
-        assert (index_dir / "indptr.zarr").exists(), f"indptr.zarr missing in {index_dir}"
-        assert (index_dir / "meta.json").exists(), f"meta.json missing in {index_dir}"
+        slug_dir = tmp_index_store / DATASET_SLUG
+        assert (slug_dir / "data.zarr").exists(), f"data.zarr missing in {slug_dir}"
+        assert (slug_dir / "indices.zarr").exists(), f"indices.zarr missing in {slug_dir}"
+        assert (slug_dir / "indptr.zarr").exists(), f"indptr.zarr missing in {slug_dir}"
+        assert (slug_dir / "meta.json").exists(), f"meta.json missing in {slug_dir}"
 
-    def test_build_index_meta_json_content(self, tmp_zarr_root: Path, live_client: TestClient):
-        """meta.json written by POST /index must contain nitems and graph_params."""
+    def test_build_index_meta_json_content(
+        self, tmp_index_store: Path, live_client: TestClient
+    ):
+        """meta.json written by POST /index must contain nitems and csr_shape.
+
+        Note: graph_params is returned in the HTTP response body by the route
+        handler but is NOT written to meta.json by _persist_csr.
+        """
         live_client.post(f"/api/datasets/{DATASET_ID}/index")
-        index_dir = tmp_zarr_root / "matrix" / "_arrowspace_index"
-        meta = json.loads((index_dir / "meta.json").read_text())
+        slug_dir = tmp_index_store / DATASET_SLUG
+        meta = json.loads((slug_dir / "meta.json").read_text())
         assert meta["nitems"] == NITEMS
-        assert "graph_params" in meta
+        assert "csr_shape" in meta, f"expected csr_shape in meta.json, got: {list(meta)}"
 
 
 # ===========================================================================
