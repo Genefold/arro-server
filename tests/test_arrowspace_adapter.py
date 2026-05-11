@@ -151,9 +151,7 @@ class TestSearch:
         assert result["backend"] == "arrowspace"
 
     def test_custom_tau(self, built_adapter):
-        result = built_adapter.search(
-            "test/ds", {"vector": FIXTURE_ARRAY[0].tolist(), "tau": 2.0}
-        )
+        result = built_adapter.search("test/ds", {"vector": FIXTURE_ARRAY[0].tolist(), "tau": 2.0})
         assert "results" in result
 
     def test_raises_404_missing_vector(self, built_adapter):

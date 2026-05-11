@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """tests/test_phase1_arrowspace.py — Phase 1 full test suite.
 
 All 3 bugs from test_fails.txt are addressed in the production code;
@@ -13,6 +11,8 @@ Bug fixes reflected here:
   3. arrowspace load() catches Exception (not just ImportError) so a
      broken __init__.py falls back to sidecar without crashing.
 """
+
+from __future__ import annotations
 
 import os
 import sys
@@ -147,6 +147,7 @@ def built_client(live_client: TestClient) -> TestClient:
 class TestAdapterUnit:
     def setup_method(self):
         from arro_server.arrowspace_adapter import _ArrowSpaceAdapter
+
         self.fake_mod = _make_fake_arrowspace_module()
         self.adapter = _ArrowSpaceAdapter(self.fake_mod, cache_size=4)
 
@@ -202,6 +203,7 @@ class TestAdapterUnit:
 
     def test_search_requires_vector(self):
         from arro_server.errors import MetadataUnavailable
+
         ds = self._build()
         with pytest.raises(MetadataUnavailable):
             self.adapter.search(ds, {"tau": 1.0})
@@ -214,6 +216,7 @@ class TestAdapterUnit:
 
     def test_search_batch_requires_vectors(self):
         from arro_server.errors import MetadataUnavailable
+
         ds = self._build()
         with pytest.raises(MetadataUnavailable):
             self.adapter.search_batch(ds, {"tau": 1.0})
@@ -256,6 +259,7 @@ class TestAdapterUnit:
 
     def test_missing_index_raises(self):
         from arro_server.errors import MetadataUnavailable
+
         with pytest.raises(MetadataUnavailable):
             self.adapter.lambdas("never_built")
 
@@ -401,7 +405,9 @@ class TestSearchVariants:
         assert body["backend"] == "arrowspace"
 
     def test_search_hybrid(self, built_client: TestClient):
-        body = self._post(built_client, "search/hybrid", {"vector": VECTOR, "tau": 1.0, "alpha": 0.5})
+        body = self._post(
+            built_client, "search/hybrid", {"vector": VECTOR, "tau": 1.0, "alpha": 0.5}
+        )
         assert body["backend"] == "arrowspace"
 
     def test_search_hybrid_alpha_zero(self, built_client: TestClient):
@@ -516,6 +522,7 @@ class TestLRUCache:
     def test_eviction_under_maxsize_1(self):
         from arro_server.arrowspace_adapter import _ArrowSpaceAdapter
         from arro_server.errors import MetadataUnavailable
+
         adapter = _ArrowSpaceAdapter(_make_fake_arrowspace_module(), cache_size=1)
         adapter.build_index("ds1", FAKE_ITEMS.copy(), Path("/tmp/idx"))
         adapter.build_index("ds2", FAKE_ITEMS.copy(), Path("/tmp/idx"))
@@ -526,6 +533,7 @@ class TestLRUCache:
     def test_access_refreshes_lru_order(self):
         from arro_server.arrowspace_adapter import _ArrowSpaceAdapter
         from arro_server.errors import MetadataUnavailable
+
         adapter = _ArrowSpaceAdapter(_make_fake_arrowspace_module(), cache_size=2)
         adapter.build_index("ds1", FAKE_ITEMS.copy(), Path("/tmp/idx"))
         adapter.build_index("ds2", FAKE_ITEMS.copy(), Path("/tmp/idx"))
@@ -538,6 +546,7 @@ class TestLRUCache:
 
     def test_cache_delete(self):
         from arro_server.arrowspace_adapter import _IndexEntry, _LRUIndexCache
+
         cache = _LRUIndexCache(maxsize=4)
         entry = _IndexEntry(aspace=None, gl=None, nitems=1, nfeatures=1, nclusters=1)
         cache.put("k1", entry)

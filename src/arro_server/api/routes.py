@@ -170,7 +170,12 @@ def dataset_slice(
     except ValueError as e:
         raise InvalidSlice(str(e)) from e
     arr = h.read_window(rs)
-    return {"id": h.summary.dataset_id, "slice": spec, "out_shape": list(arr.shape), "data": array_to_payload(arr)}
+    return {
+        "id": h.summary.dataset_id,
+        "slice": spec,
+        "out_shape": list(arr.shape),
+        "data": array_to_payload(arr),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -309,7 +314,12 @@ def dataset_lambdas(
     adapter: ArrowSpaceAdapter = Depends(_arrowspace),
 ) -> dict[str, Any]:
     data = adapter.lambdas(dataset_id)
-    return {"id": dataset_id, "backend": adapter.backend, "arrowspace_available": adapter.available, **data}
+    return {
+        "id": dataset_id,
+        "backend": adapter.backend,
+        "arrowspace_available": adapter.available,
+        **data,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -364,7 +374,12 @@ def dataset_search_vector(
     adapter: ArrowSpaceAdapter = Depends(_arrowspace),
 ) -> dict[str, Any]:
     data = adapter.search(dataset_id, body.model_dump())
-    return {"id": dataset_id, "backend": adapter.backend, "arrowspace_available": adapter.available, **data}
+    return {
+        "id": dataset_id,
+        "backend": adapter.backend,
+        "arrowspace_available": adapter.available,
+        **data,
+    }
 
 
 @router.post("/datasets/{dataset_id}/search/energy")
@@ -374,7 +389,12 @@ def dataset_search_energy(
     adapter: ArrowSpaceAdapter = Depends(_arrowspace),
 ) -> dict[str, Any]:
     data = adapter.search_energy(dataset_id, body.model_dump())
-    return {"id": dataset_id, "backend": adapter.backend, "arrowspace_available": adapter.available, **data}
+    return {
+        "id": dataset_id,
+        "backend": adapter.backend,
+        "arrowspace_available": adapter.available,
+        **data,
+    }
 
 
 @router.post("/datasets/{dataset_id}/search/hybrid")
@@ -384,7 +404,12 @@ def dataset_search_hybrid(
     adapter: ArrowSpaceAdapter = Depends(_arrowspace),
 ) -> dict[str, Any]:
     data = adapter.search_hybrid(dataset_id, body.model_dump())
-    return {"id": dataset_id, "backend": adapter.backend, "arrowspace_available": adapter.available, **data}
+    return {
+        "id": dataset_id,
+        "backend": adapter.backend,
+        "arrowspace_available": adapter.available,
+        **data,
+    }
 
 
 @router.post("/datasets/{dataset_id}/search/linear")
@@ -394,7 +419,12 @@ def dataset_search_linear(
     adapter: ArrowSpaceAdapter = Depends(_arrowspace),
 ) -> dict[str, Any]:
     data = adapter.search_linear_sorted(dataset_id, body.model_dump())
-    return {"id": dataset_id, "backend": adapter.backend, "arrowspace_available": adapter.available, **data}
+    return {
+        "id": dataset_id,
+        "backend": adapter.backend,
+        "arrowspace_available": adapter.available,
+        **data,
+    }
 
 
 @router.post("/datasets/{dataset_id}/search/batch")
@@ -404,7 +434,12 @@ def dataset_search_batch(
     adapter: ArrowSpaceAdapter = Depends(_arrowspace),
 ) -> dict[str, Any]:
     data = adapter.search_batch(dataset_id, body.model_dump())
-    return {"id": dataset_id, "backend": adapter.backend, "arrowspace_available": adapter.available, **data}
+    return {
+        "id": dataset_id,
+        "backend": adapter.backend,
+        "arrowspace_available": adapter.available,
+        **data,
+    }
 
 
 # ---------------------------------------------------------------------------

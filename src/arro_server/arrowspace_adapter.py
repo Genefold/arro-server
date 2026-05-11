@@ -333,8 +333,14 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
                 ("indptr", np.asarray(csr_indptr, dtype=np.int64)),
             ):
                 zarr_path = dest / f"{arr_name}.zarr"
-                z = zarr.open(str(zarr_path), mode="w", shape=arr_val.shape,
-                              dtype=arr_val.dtype, chunks=True, zarr_format=3)
+                z = zarr.open(
+                    str(zarr_path),
+                    mode="w",
+                    shape=arr_val.shape,
+                    dtype=arr_val.dtype,
+                    chunks=True,
+                    zarr_format=3,
+                )
                 z[:] = arr_val
             meta_dict = dict(meta)
             meta_dict["csr_shape"] = list(csr_shape)
@@ -359,7 +365,8 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
         log.info("Building index for '%s' shape=%s params=%s", dataset_id, arr64.shape, gp)
         aspace, gl = self._mod.ArrowSpaceBuilder().build(gp, arr64)
         entry = _IndexEntry(
-            aspace=aspace, gl=gl,
+            aspace=aspace,
+            gl=gl,
             nitems=int(aspace.nitems),
             nfeatures=int(aspace.nfeatures),
             nclusters=int(aspace.nclusters),
@@ -373,8 +380,7 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
         entry = self._cache.get(dataset_id)
         if entry is None:
             raise MetadataUnavailable(
-                f"No index built for '{dataset_id}'. "
-                "Call POST /api/datasets/{id}/index first."
+                f"No index built for '{dataset_id}'. Call POST /api/datasets/{{id}}/index first."
             )
         return entry
 
@@ -467,14 +473,15 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
         try:
             vecs = np.asarray(vecs_raw, dtype=np.float64)
         except (ValueError, TypeError) as exc:
-            raise HTTPException(status_code=422, detail="'vectors' must be a 2-D list of numbers") from exc
+            raise HTTPException(
+                status_code=422, detail="'vectors' must be a 2-D list of numbers"
+            ) from exc
         tau = float(query.get("tau", 1.0))
         batch_hits = entry.aspace.search_batch(vecs, entry.gl, tau)
         return {
             "backend": "arrowspace",
             "results": [
-                [{"index": int(i), "score": float(s)} for i, s in hits]
-                for hits in batch_hits
+                [{"index": int(i), "score": float(s)} for i, s in hits] for hits in batch_hits
             ],
         }
 
@@ -513,19 +520,31 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
 
     def spot_motives_eigen(self, dataset_id: str) -> dict[str, Any]:
         entry = self._get_entry(dataset_id)
-        return {"method": "spot_motives_eigen", "results": self._spot_hits(entry.aspace.spot_motives_eigen())}
+        return {
+            "method": "spot_motives_eigen",
+            "results": self._spot_hits(entry.aspace.spot_motives_eigen()),
+        }
 
     def spot_motives_energy(self, dataset_id: str) -> dict[str, Any]:
         entry = self._get_entry(dataset_id)
-        return {"method": "spot_motives_energy", "results": self._spot_hits(entry.aspace.spot_motives_energy())}
+        return {
+            "method": "spot_motives_energy",
+            "results": self._spot_hits(entry.aspace.spot_motives_energy()),
+        }
 
     def spot_subg_centroids(self, dataset_id: str) -> dict[str, Any]:
         entry = self._get_entry(dataset_id)
-        return {"method": "spot_subg_centroids", "results": self._spot_hits(entry.aspace.spot_subg_centroids())}
+        return {
+            "method": "spot_subg_centroids",
+            "results": self._spot_hits(entry.aspace.spot_subg_centroids()),
+        }
 
     def spot_subg_motives(self, dataset_id: str) -> dict[str, Any]:
         entry = self._get_entry(dataset_id)
-        return {"method": "spot_subg_motives", "results": self._spot_hits(entry.aspace.spot_subg_motives())}
+        return {
+            "method": "spot_subg_motives",
+            "results": self._spot_hits(entry.aspace.spot_subg_motives()),
+        }
 
     def manifold_data(self, dataset_id: str) -> dict[str, Any]:
         entry = self._get_entry(dataset_id)
@@ -560,7 +579,9 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
     def sidecar_stats(self, dataset_path: Path) -> dict[str, Any]:
         return _SidecarAdapter._read(dataset_path, "stats.json")
 
-    def sidecar_search(self, dataset_path: Path, q: str, *, limit: int = 20) -> list[dict[str, Any]]:
+    def sidecar_search(
+        self, dataset_path: Path, q: str, *, limit: int = 20
+    ) -> list[dict[str, Any]]:
         return _SidecarAdapter().sidecar_search(dataset_path, q, limit=limit)
 
 
@@ -586,6 +607,7 @@ def load() -> ArrowSpaceAdapter:
 
     try:
         import arrowspace as _mod  # type: ignore
+
         cache_size = get_settings().index_cache_size
         log.info("arrowspace package found; using live adapter (cache_size=%d)", cache_size)
         return _ArrowSpaceAdapter(_mod, cache_size=cache_size)
