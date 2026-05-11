@@ -46,12 +46,12 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from .. import __version__
-from ..arrowspace_adapter import DEFAULT_GRAPH_PARAMS, ArrowSpaceAdapter, _ArrowSpaceAdapter
+from ..arrowspace_adapter import DEFAULT_GRAPH_PARAMS, ArrowSpaceAdapter
 from ..arrowspace_adapter import load as load_arrowspace
-from ..errors import DatasetNotSliceable, InvalidSlice, OptionalDependencyMissing
+from ..errors import OptionalDependencyMissing
 from ..search_engine import PromptSearchEngine
 from ..settings import Settings, get_settings
-from ..slicing import ResolvedSlice, enforce_window_budget, parse_slice, trailing_product
+from ..slicing import enforce_window_budget, parse_slice
 from ..storage import StorageRegistry, get_registry
 from ..storage.zarr_fs import zarr_available
 from .schemas import (
@@ -77,29 +77,6 @@ def _registry() -> StorageRegistry:
 
 def _arrowspace() -> ArrowSpaceAdapter:
     return load_arrowspace()
-
-
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
-
-def _read_rows(h, offset: int, nrows: int) -> np.ndarray:
-    """Read *nrows* rows starting at *offset* from any DatasetHandle.
-
-    Uses read_window(ResolvedSlice) which is the only public read surface
-    on _ZarrArrayHandle.  Works for any 2-D or N-D array handle.
-    """
-    shape = h.summary.shape
-    ndim  = len(shape)
-    end   = min(offset + nrows, shape[0])
-    # Build a tuple of Python slice objects: first axis is the row range,
-    # all remaining axes are unconstrained.
-    slices = tuple(
-        slice(offset, end) if i == 0 else slice(None)
-        for i in range(ndim)
-    )
-    rs = ResolvedSlice(selectors=slices, shape=shape, ndim=ndim)
-    return h.read_window(rs)
 
 
 # ---------------------------------------------------------------------------
@@ -160,7 +137,6 @@ def dataset_metadata(
     reg: StorageRegistry = Depends(_registry),
 ) -> dict[str, Any]:
     h = reg.open(dataset_id)
-    # attrs is stored in h.metadata by ZarrFilesystemBackend.open()
     attrs = h.metadata.get("attrs", {})
     return {
         "id":     h.summary.dataset_id,
@@ -182,43 +158,39 @@ def dataset_data(
     reg: StorageRegistry = Depends(_registry),
     settings: Settings   = Depends(get_settings),
 ) -> dict[str, Any]:
-    h = reg.open(dataset_id)
+    h     = reg.open(dataset_id)
     shape = h.summary.shape
     if not shape:
         raise HTTPException(status_code=422, detail="Dataset is a group, not an array.")
-    nrows = shape[0]
     if limit < 0:
         limit = settings.default_window
-    limit = min(limit, settings.max_window, nrows - offset)
-    if limit <= 0:
-        return array_to_payload(np.empty((0,) + shape[1:], dtype=h.summary.dtype), offset=offset)
-    arr = _read_rows(h, offset, limit)
+    limit = min(limit, settings.max_window)
+    rs = parse_slice(None, shape, offset=offset, limit=limit)
+    try:
+        enforce_window_budget(rs, settings.max_window * shape[1] if len(shape) > 1 else settings.max_window)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    arr = h.read_window(rs)
     return array_to_payload(arr, offset=offset)
 
 
 @router.get("/datasets/{dataset_id}/slice")
 def dataset_slice(
     dataset_id: str,
-    spec: str            = Query(..., description="NumPy-style slice, e.g. '0:10,2:5'."),
+    spec: str          = Query(..., description="NumPy-style slice, e.g. '0:10,2:5'."),
     reg: StorageRegistry = Depends(_registry),
     settings: Settings   = Depends(get_settings),
 ) -> dict[str, Any]:
     h     = reg.open(dataset_id)
     shape = h.summary.shape
-    ndim  = len(shape)
     try:
-        slices = parse_slice(spec, ndim)
-    except InvalidSlice as exc:
+        rs = parse_slice(spec, shape)
+    except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     try:
-        slices = enforce_window_budget(
-            slices, shape, ndim,
-            max_rows=settings.max_window,
-            trailing_product=trailing_product,
-        )
-    except DatasetNotSliceable as exc:
+        enforce_window_budget(rs, settings.max_window * (shape[1] if len(shape) > 1 else 1))
+    except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    rs  = ResolvedSlice(selectors=slices, shape=shape, ndim=ndim)
     arr = h.read_window(rs)
     return array_to_payload(arr, offset=0)
 
@@ -230,11 +202,10 @@ def dataset_stats(
     adapter: ArrowSpaceAdapter = Depends(_arrowspace),
 ) -> dict[str, Any]:
     h = reg.open(dataset_id)
-    fs_path = h.fs_path
-    if fs_path is None:
+    if h.fs_path is None:
         return {}
     try:
-        return adapter.sidecar_stats(fs_path)
+        return adapter.sidecar_stats(h.fs_path)
     except FileNotFoundError:
         return {}
 
@@ -246,11 +217,10 @@ def dataset_manifold(
     adapter: ArrowSpaceAdapter = Depends(_arrowspace),
 ) -> dict[str, Any]:
     h = reg.open(dataset_id)
-    fs_path = h.fs_path
-    if fs_path is None:
+    if h.fs_path is None:
         return {}
     try:
-        return adapter.sidecar_manifold(fs_path)
+        return adapter.sidecar_manifold(h.fs_path)
     except FileNotFoundError:
         return {}
 
@@ -264,10 +234,9 @@ def dataset_keyword_search(
     adapter: ArrowSpaceAdapter = Depends(_arrowspace),
 ) -> dict[str, Any]:
     h = reg.open(dataset_id)
-    fs_path = h.fs_path
-    if fs_path is None:
+    if h.fs_path is None:
         raise HTTPException(status_code=404, detail="No filesystem path for this dataset.")
-    results = adapter.sidecar_search(fs_path, q, limit=limit)
+    results = adapter.sidecar_search(h.fs_path, q, limit=limit)
     return {"query": q, "results": results}
 
 
@@ -279,23 +248,10 @@ def build_index(
     adapter: ArrowSpaceAdapter = Depends(_arrowspace),
     settings: Settings   = Depends(get_settings),
 ) -> dict[str, Any]:
-    """Build and persist an ArrowSpace graph-Laplacian index for a dataset.
-
-    The adapter signature is:
-        build_index(dataset_id: str, array: np.ndarray, index_store: Path, graph_params=None)
-
-    We resolve each argument from the registry handle and settings:
-      - dataset_id   : the URL path parameter (string key used by the cache)
-      - array        : full float64 matrix read from Zarr via h._arr[:]
-      - index_store  : first resolved data root on disk, used as persistence dir
-      - graph_params : from request body, falling back to DEFAULT_GRAPH_PARAMS
-    """
+    """Build and persist an ArrowSpace graph-Laplacian index for a dataset."""
     h            = reg.open(dataset_id)
     graph_params = (body.graph_params if body else None) or DEFAULT_GRAPH_PARAMS
 
-    # Access the raw zarr array directly — it is the only zero-copy path.
-    # _ZarrArrayHandle stores it at ._arr; the public read_window() API
-    # requires a ResolvedSlice and adds unnecessary overhead for a full read.
     raw_arr = getattr(h, "_arr", None)
     if raw_arr is None:
         raise HTTPException(
@@ -307,7 +263,6 @@ def build_index(
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to read array: {exc}") from exc
 
-    # Resolve a writable index_store directory.
     roots = list(settings.resolved_roots.values())
     if roots:
         index_store = Path(roots[0]).parent / "_arrowspace_index"
@@ -327,10 +282,7 @@ def build_index(
     except OptionalDependencyMissing as exc:
         raise HTTPException(
             status_code=501,
-            detail=(
-                "Index building requires the arrowspace package. "
-                "Install it with: pip install arrowspace"
-            ),
+            detail="Index building requires the arrowspace package: pip install arrowspace",
         ) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"build_index failed: {exc}") from exc
@@ -345,11 +297,10 @@ def dataset_lambdas(
     adapter: ArrowSpaceAdapter = Depends(_arrowspace),
 ) -> dict[str, Any]:
     h = reg.open(dataset_id)
-    fs_path = h.fs_path
-    if fs_path is None:
+    if h.fs_path is None:
         raise HTTPException(status_code=404, detail="No filesystem path for this dataset.")
     try:
-        return adapter.lambdas(fs_path)
+        return adapter.lambdas(h.fs_path)
     except (FileNotFoundError, NotImplementedError) as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -361,11 +312,10 @@ def dataset_graph_laplacian(
     adapter: ArrowSpaceAdapter = Depends(_arrowspace),
 ) -> dict[str, Any]:
     h = reg.open(dataset_id)
-    fs_path = h.fs_path
-    if fs_path is None:
+    if h.fs_path is None:
         raise HTTPException(status_code=404, detail="No filesystem path for this dataset.")
     try:
-        return adapter.graph_laplacian_info(fs_path)
+        return adapter.graph_laplacian_info(h.fs_path)
     except (FileNotFoundError, NotImplementedError) as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -535,7 +485,6 @@ def spot_subgraph_motives(
 
 
 def _get_engine() -> PromptSearchEngine:
-    """Return the warm engine or raise 503 with a helpful message."""
     try:
         return PromptSearchEngine.get()
     except FileNotFoundError as exc:
@@ -549,7 +498,6 @@ def _get_engine() -> PromptSearchEngine:
 
 
 def _get_embedder():
-    """Return the warm embedder or raise 503 with a helpful message."""
     try:
         from ..embedder import EmbedderService
         return EmbedderService.get()
@@ -565,10 +513,6 @@ def _get_embedder():
 
 @router.get("/prompts/health")
 def prompts_health() -> dict[str, Any]:
-    """Return readiness status for the embedder and prompt search engine.
-
-    Does NOT trigger a cold-start — use GET /api/prompts/warm for that.
-    """
     engine_ready   = PromptSearchEngine._instance is not None
     embedder_ready = False
     embedder_model = None
@@ -579,7 +523,6 @@ def prompts_health() -> dict[str, Any]:
             embedder_model = EmbedderService._instance.model_name  # type: ignore[union-attr]
     except Exception:
         pass
-
     status = "ready" if (engine_ready and embedder_ready) else "warming"
     return {
         "status": status,
@@ -591,7 +534,6 @@ def prompts_health() -> dict[str, Any]:
 
 @router.get("/prompts/warm")
 def prompts_warm() -> dict[str, Any]:
-    """Trigger (or confirm) warm-up of the PromptSearchEngine and EmbedderService."""
     engine    = _get_engine()
     _embedder = _get_embedder()
     return {
@@ -604,7 +546,6 @@ def prompts_warm() -> dict[str, Any]:
 
 @router.get("/prompts/lambdas")
 def prompts_lambdas() -> dict[str, Any]:
-    """Eigenvalue distribution of the prompt corpus graph Laplacian."""
     engine = _get_engine()
     try:
         lambdas = engine.gl.lambdas().tolist()
@@ -615,7 +556,6 @@ def prompts_lambdas() -> dict[str, Any]:
 
 @router.get("/prompts/graph_laplacian")
 def prompts_graph_laplacian() -> dict[str, Any]:
-    """Metadata about the prompt corpus graph Laplacian."""
     engine = _get_engine()
     nnodes = int(engine.gl.nnodes)
     try:
@@ -633,15 +573,11 @@ def prompts_graph_laplacian() -> dict[str, Any]:
 
 @router.get("/prompts/audit")
 def prompts_audit() -> dict[str, Any]:
-    """Full audit payload: degree stats, Fiedler vector, PCA 2D scatter."""
     engine = _get_engine()
     try:
         from sklearn.decomposition import PCA  # type: ignore
     except ImportError as exc:
-        raise HTTPException(
-            status_code=501,
-            detail="scikit-learn is required for /prompts/audit.",
-        ) from exc
+        raise HTTPException(status_code=501, detail="scikit-learn is required for /prompts/audit.") from exc
 
     try:
         gl_dense = engine.gl.to_dense()
@@ -650,7 +586,7 @@ def prompts_audit() -> dict[str, Any]:
         degrees = np.zeros(engine.aspace.nitems)
 
     try:
-        lambdas = engine.gl.lambdas()
+        lambdas     = engine.gl.lambdas()
         fiedler_val = float(sorted(lambdas)[1]) if len(lambdas) > 1 else 0.0
     except Exception:
         fiedler_val = 0.0
@@ -674,7 +610,6 @@ def prompts_audit() -> dict[str, Any]:
 
 @router.post("/prompts/search", response_model=PromptSearchResponse)
 def prompts_search(body: PromptSearchRequest) -> PromptSearchResponse:
-    """Semantic search with a pre-embedded 768-d nomic vector."""
     engine = _get_engine()
     q      = np.asarray(body.vector, dtype=np.float64)
     try:
@@ -693,16 +628,6 @@ def prompts_search(body: PromptSearchRequest) -> PromptSearchResponse:
 
 @router.post("/prompts/nl_search", response_model=PromptSearchResponse)
 def prompts_nl_search(body: NLSearchRequest) -> PromptSearchResponse:
-    """Natural-language semantic search — primary frontend endpoint.
-
-    The server embeds `query` using EmbedderService
-    (nomic-ai/nomic-embed-text-v1.5) and runs the ArrowSpace spectral
-    search + MMR rerank pipeline.
-
-    Request body example::
-
-        {"query": "how to write a DALL-E prompt for minimalist art", "k": 10}
-    """
     embedder  = _get_embedder()
     engine    = _get_engine()
     query_vec = embedder.embed(body.query)
@@ -716,7 +641,6 @@ def prompts_nl_search(body: NLSearchRequest) -> PromptSearchResponse:
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-
     return PromptSearchResponse(
         query=body.query,
         k=body.k,
