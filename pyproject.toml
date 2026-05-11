@@ -5,70 +5,103 @@ build-backend = "hatchling.build"
 [project]
 name = "arro-server"
 version = "0.1.0"
-description = "FastAPI server for serving Zarr v3 datasets with ArrowSpace graph-Laplacian index (Includes Semantic Engine Demo)"
+description = "FastAPI server for Zarr v3 datasets with ArrowSpace graph-Laplacian index and LEAF Kaban semantic search"
 readme = "README.md"
 requires-python = ">=3.12"
 license = { file = "LICENSE" }
 authors = [{ name = "Genefold / ArrowSpace contributors" }]
+
+# ── Core runtime deps ────────────────────────────────────────────────────────
+# Only what the HTTP server needs to boot and serve requests.
+# Notebook / ML-only packages live in [project.optional-dependencies].
 dependencies = [
+    # graph index (always required – this IS the search backend)
     "arrowspace>=0.26.2",
     "arrowspace-tuner>=0.3.1",
-    "einops>=0.8.2",
-    "fastapi>=0.110",
-    "google-genai>=1.70.0",
-    "ipykernel>=7.2.0",
-    "matplotlib>=3.10.8",
-    "nbformat>=5.10.4",
-    "numpy>=1.26",
-    "pandas>=3.0.1",
-    "plotly>=6.7.0",
+    # web framework
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.27",
+    # validation / settings
     "pydantic>=2.6",
     "pydantic-settings>=2.2",
-    "requests>=2.33.1",
-    "tinydb>=4.8.2",
-    "uvicorn[standard]>=0.27",
-    "zarr>=3.0"
+    # data
+    "numpy>=1.26",
+    "zarr>=3.0",
+    # required by /prompts/audit (PCA scatter)
+    "scikit-learn>=1.4",
 ]
 
+# ── Optional extras ──────────────────────────────────────────────────────────
 [project.optional-dependencies]
+
+# Zarr remote-storage drivers (S3, GCS, etc.)
 zarr = ["zarr>=3.0", "fsspec>=2024.2"]
+
+# Apache Arrow in-memory exchange
 arrow = ["pyarrow>=15.0"]
-# pip install arrowspace  (repo: https://github.com/tuned-org-uk/pyarrowspace)
-arrowspace = ["arrowspace"]
-# NL search layer: sentence-transformers + torch backend
-# pip install 'arro-server[nlp]'
+
+# NL search layer – embeds plain-text queries server-side.
+# Install with:  pip install 'arro-server[nlp]'
+# Note: torch wheels are large (~2 GB). Pin to a CPU-only index if needed:
+#   pip install 'arro-server[nlp]' --extra-index-url https://download.pytorch.org/whl/cpu
 nlp = [
     "sentence-transformers>=5.3.0",
-    "torch",
+    "torch>=2.2",
     "torchaudio",
     "torchvision",
 ]
-dev = [
-    "pytest>=8.0",
-    "fastapi[standard]>=0.110",
-    "pytest-asyncio>=0.23",
-    "httpx>=0.27",
-    "ruff>=0.4",
-    "fsspec>=2024.2",
-    "pre-commit"
+
+# Notebook / exploration tools – NOT needed by the running server.
+# Install with:  pip install 'arro-server[notebook]'
+notebook = [
+    "ipykernel>=6.0",
+    "matplotlib>=3.8",
+    "nbformat>=5.9",
+    "pandas>=2.0",
+    "plotly>=5.0",
+    "google-genai>=1.0",
+    "einops>=0.7",
+    "requests>=2.31",
+    "tinydb>=4.8",
 ]
 
+# Development toolchain
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "httpx>=0.27",
+    "fastapi[standard]>=0.115",
+    "ruff>=0.4",
+    "fsspec>=2024.2",
+    "pre-commit",
+]
+
+# Convenience: everything in one shot
+# pip install 'arro-server[full]'
+full = [
+    "arro-server[zarr,arrow,nlp,notebook,dev]",
+]
+
+# ── Entry points ─────────────────────────────────────────────────────────────
 [project.scripts]
 arro-server = "arro_server.__main__:main"
 
+# ── Hatch build ──────────────────────────────────────────────────────────────
 [tool.hatch.build.targets.wheel]
-# FIX: removed ghost package src/semantic_engine_demo which does not exist
-# and caused `hatch build` to fail with a FileNotFoundError.
-packages = [
-    "src/arro_server"
-]
+packages = ["src/arro_server"]
 
+# NOTE: hatchling raises FileNotFoundError at build time if the source
+# directory does not exist.  The frontend/ dir must be present (even empty)
+# before running `hatch build` or `pip install -e .` in CI.
+# Create it with:  mkdir -p frontend
 [tool.hatch.build.targets.wheel.shared-data]
 "frontend" = "share/arro_server/frontend"
 
+# ── Ruff ─────────────────────────────────────────────────────────────────────
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+# Matches requires-python = ">=3.12"
+target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
@@ -77,6 +110,7 @@ ignore = ["E501", "B008", "SIM105", "SIM108"]
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["B017"]
 
+# ── Pytest ───────────────────────────────────────────────────────────────────
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
