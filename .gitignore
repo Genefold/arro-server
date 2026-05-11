@@ -4,6 +4,7 @@ __pycache__/
 *$py.class
 .ruff_cache/
 .venv/
+arrowspace_index/
 
 # C extensions
 *.so
