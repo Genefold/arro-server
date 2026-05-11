@@ -25,11 +25,7 @@ dependencies = [
     "pydantic>=2.6",
     "pydantic-settings>=2.2",
     "requests>=2.33.1",
-    "sentence-transformers>=5.3.0",
     "tinydb>=4.8.2",
-    "torch",
-    "torchaudio",
-    "torchvision",
     "uvicorn[standard]>=0.27",
     "zarr>=3.0"
 ]
@@ -38,8 +34,15 @@ dependencies = [
 zarr = ["zarr>=3.0", "fsspec>=2024.2"]
 arrow = ["pyarrow>=15.0"]
 # pip install arrowspace  (repo: https://github.com/tuned-org-uk/pyarrowspace)
-# Task 1.1: renamed extra key from 'pyarrowspace' -> 'arrowspace' to match PyPI package name
 arrowspace = ["arrowspace"]
+# NL search layer: sentence-transformers + torch backend
+# pip install 'arro-server[nlp]'
+nlp = [
+    "sentence-transformers>=5.3.0",
+    "torch",
+    "torchaudio",
+    "torchvision",
+]
 dev = [
     "pytest>=8.0",
     "fastapi[standard]>=0.110",
@@ -54,9 +57,10 @@ dev = [
 arro-server = "arro_server.__main__:main"
 
 [tool.hatch.build.targets.wheel]
+# FIX: removed ghost package src/semantic_engine_demo which does not exist
+# and caused `hatch build` to fail with a FileNotFoundError.
 packages = [
-    "src/arro_server",
-    "src/semantic_engine_demo"
+    "src/arro_server"
 ]
 
 [tool.hatch.build.targets.wheel.shared-data]

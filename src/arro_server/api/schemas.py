@@ -53,16 +53,65 @@ class SearchBatchRequest(BaseModel):
 
 
 class PromptSearchRequest(BaseModel):
-    """Body for POST /api/prompts/search — semantic prompt search with MMR rerank.
+    """Body for POST /api/prompts/search.
 
-    eps and k are fixed at build time from the latest tuner run.
-    tau controls spectral sharpness at query time (user-controlled, default 0.75).
+    The caller supplies a pre-computed 768-d nomic embedding.
+    Use POST /api/prompts/nl_search to let the server embed the query.
     """
 
     vector: list[float] = Field(..., description="768-dim nomic-embed-text-v1.5 query vector.")
     k: int              = Field(10, ge=1, le=100, description="Number of results to return.")
     tau: float          = Field(0.75, ge=0.0, le=5.0, description="Spectral sharpness (0=broad, 5=sharp). Default 0.75.")
-    alpha: float        = Field(0.6, ge=0.0, le=1.0, description="Cosine vs spectral blend (0=spectral, 1=cosine).")
+    alpha: float        = Field(0.6, ge=0.0, le=1.0, description="Cosine vs spectral blend.")
+    lam: float          = Field(0.7, ge=0.0, le=1.0, description="MMR diversity weight (1.0=pure relevance, 0.0=max diversity).")
+
+    @model_validator(mode="after")
+    def _check_vector_dim(self) -> "PromptSearchRequest":
+        if len(self.vector) != 768:
+            raise ValueError(f"vector must have exactly 768 dimensions, got {len(self.vector)}")
+        return self
+
+
+class NLSearchRequest(BaseModel):
+    """Body for POST /api/prompts/nl_search.
+
+    The server embeds `query` using EmbedderService and runs the search.
+    This is the primary endpoint for frontend consumers.
+    """
+
+    query: str   = Field(..., min_length=1, max_length=2048, description="Natural language search query.")
+    k: int       = Field(10, ge=1, le=100, description="Number of results to return.")
+    tau: float   = Field(0.75, ge=0.0, le=5.0, description="Spectral sharpness. Default 0.75.")
+    alpha: float = Field(0.6, ge=0.0, le=1.0, description="Cosine vs spectral blend.")
+    lam: float   = Field(0.7, ge=0.0, le=1.0, description="MMR diversity weight.")
+
+
+class PromptSearchResult(BaseModel):
+    """A single result returned by /prompts/search or /prompts/nl_search."""
+
+    id: str
+    title: str | None = None
+    body: str | None = None
+    tags: list[str] = Field(default_factory=list)
+    upvotes: int | None = None
+    views: int | None = None
+    author_reputation: float | None = None
+    _score: float = 0.0
+    _salience: float = 0.0
+    _tau: float = 0.0
+
+    model_config = {"extra": "allow"}  # pass-through any extra fields from dataset
+
+
+class PromptSearchResponse(BaseModel):
+    """Response envelope for /prompts/search and /prompts/nl_search."""
+
+    query: str | None = Field(None, description="Original NL query (nl_search only).")
+    k: int
+    tau: float
+    lam: float
+    results: list[PromptSearchResult]
+    result_count: int
 
 
 class IndexBuildRequest(BaseModel):
@@ -74,24 +123,21 @@ class IndexBuildRequest(BaseModel):
 
         {"graph_params": {"eps": 0.5, "k": 4, "topk": 2, "p": 1.0, "sigma": 0.5}}
 
-    Flat (convenience — the whole body is treated as graph_params)::
+    Flat (convenience -- the whole body is treated as graph_params)::
 
         {"eps": 0.5, "k": 4, "topk": 2, "p": 1.0, "sigma": 0.5}
     """
 
-    graph_params: dict[str, Any] | None = Field(
-        default=None,
-        description="ArrowSpaceBuilder graph params. Omit to use server defaults.",
+    graph_params: dict[str, Any] = Field(
+        default_factory=dict,
+        description="ArrowSpace build parameters (eps, k, topk, p, sigma).",
     )
 
     @model_validator(mode="before")
     @classmethod
-    def _hoist_flat_graph_params(cls, values: Any) -> Any:
-        """If the body is a flat dict of graph-param keys, wrap it."""
-        if not isinstance(values, dict):
-            return values
-        if "graph_params" in values or not values:
-            return values
-        if values.keys() <= _GRAPH_PARAM_KEYS:
-            return {"graph_params": values}
-        return values
+    def _hoist_flat_params(cls, data: Any) -> Any:
+        """If the body contains only graph-param keys (flat form), wrap them."""
+        if isinstance(data, dict):
+            if "graph_params" not in data and data.keys() <= _GRAPH_PARAM_KEYS:
+                return {"graph_params": data}
+        return data

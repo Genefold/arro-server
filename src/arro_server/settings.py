@@ -45,6 +45,17 @@ class Settings(BaseSettings):
     # Oldest entry is evicted when the limit is reached.
     index_cache_size: int = 8
 
+    # ── Prompt search (LEAF Kaban) ───────────────────────────────────────────
+    # Directory that contains dataset.json and nomic_embs/.
+    # Defaults to the `data/` sibling of the package root so the dev layout
+    # (repo/data/) works without any env var.  Set ARRO_SERVER_PROMPT_DATA_DIR
+    # in containers / deployments to point at the mounted data volume.
+    prompt_data_dir: str = str(Path(__file__).parents[2] / "data")
+
+    # HuggingFace model id used by EmbedderService.
+    # Override if you want to swap in a different nomic-compatible model.
+    embedder_model: str = "nomic-ai/nomic-embed-text-v1.5"
+
     @field_validator("data_roots", "cors_origins", mode="before")
     @classmethod
     def _split_csv(cls, v: object) -> object:
