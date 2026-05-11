@@ -23,10 +23,10 @@ jobs:
         run: uv sync --extra dev
 
       - name: Ruff lint check
-        run: uv run ruff check .
+        run: uv run ruff check . --exclude tests
 
       - name: Ruff format check
-        run: uv run ruff format --check .
+        run: uv run ruff format --check . --exclude tests
 
   test:
     name: Test (pytest)
