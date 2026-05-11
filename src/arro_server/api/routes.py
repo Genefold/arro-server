@@ -171,7 +171,10 @@ def dataset_data(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     arr = h.read_window(rs)
-    return array_to_payload(arr, offset=offset)
+    payload = array_to_payload(arr)
+    payload["offset"] = offset
+    payload["limit"]  = arr.shape[0]
+    return payload
 
 
 @router.get("/datasets/{dataset_id}/slice")
@@ -192,7 +195,7 @@ def dataset_slice(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     arr = h.read_window(rs)
-    return array_to_payload(arr, offset=0)
+    return array_to_payload(arr)
 
 
 @router.get("/datasets/{dataset_id}/stats")
