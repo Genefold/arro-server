@@ -537,13 +537,25 @@ def prompts_health() -> dict[str, Any]:
 
 @router.get("/prompts/warm")
 def prompts_warm() -> dict[str, Any]:
-    engine    = _get_engine()
-    _embedder = _get_embedder()
+    """Confirm the engine is ready; also warm the embedder if available.
+
+    Returns 200 in both cases — status field distinguishes 'warm' (both
+    ready) from 'engine_only' (embedder not installed / not yet loaded).
+    This avoids a 503 for callers that only need the search engine.
+    """
+    engine = _get_engine()
+    embedder_ready = False
+    try:
+        _get_embedder()
+        embedder_ready = True
+    except HTTPException:
+        pass
     return {
-        "status": "warm",
-        "nitems":    engine.aspace.nitems,
-        "nfeatures": engine.aspace.nfeatures,
-        "nclusters": engine.aspace.nclusters,
+        "status":         "warm" if embedder_ready else "engine_only",
+        "nitems":         engine.aspace.nitems,
+        "nfeatures":      engine.aspace.nfeatures,
+        "nclusters":      engine.aspace.nclusters,
+        "embedder_ready": embedder_ready,
     }
 
 

@@ -160,9 +160,11 @@ class PromptSearchEngine:
         for row_idx, score in reranked:
             pk     = self.ids[row_idx]
             record = dict(self.dataset_map[pk])
-            record["_score"]    = round(score, 6)
-            record["_salience"] = round(self.salience.get(pk, 0.0), 6)
-            record["_tau"]      = tau
+            # Use plain (non-underscore) keys so Pydantic v2 picks them up
+            # as model fields in PromptSearchResult.
+            record["score"]    = round(score, 6)
+            record["salience"] = round(self.salience.get(pk, 0.0), 6)
+            record["tau"]      = tau
             out.append(record)
         return out
 

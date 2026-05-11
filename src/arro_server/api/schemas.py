@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import AliasChoices, BaseModel, Field, model_validator
 
 # Keys that belong to the ArrowSpaceBuilder graph_params dict.
 # If an incoming IndexBuildRequest body contains ONLY these keys (flat),
@@ -91,6 +91,11 @@ class PromptSearchResult(BaseModel):
 
     The dataset stores the prompt text in the ``content`` field.
     ``body`` is kept as a read-only alias so older clients keep working.
+
+    Scoring fields use plain names (score, salience, tau) so Pydantic v2
+    serialises them correctly.  AliasChoices also accepts the legacy
+    underscore-prefixed variants (_score, _salience, _tau) for any callers
+    that still produce those keys.
     """
 
     id: str
@@ -116,9 +121,25 @@ class PromptSearchResult(BaseModel):
     difficulty: str | None = None
     language: str | None = None
     target_model: str | None = None
-    _score: float = 0.0
-    _salience: float = 0.0
-    _tau: float = 0.0
+
+    # Scoring fields — plain names so Pydantic v2 includes them in output.
+    # AliasChoices accepts both the canonical name and the legacy _-prefixed
+    # variant so nothing breaks if old code still produces "_score" keys.
+    score: float = Field(
+        default=0.0,
+        validation_alias=AliasChoices("score", "_score"),
+        description="MMR-reranked relevance score.",
+    )
+    salience: float = Field(
+        default=0.0,
+        validation_alias=AliasChoices("salience", "_salience"),
+        description="Salience score (upvotes/likes/reputation/views blend).",
+    )
+    tau: float = Field(
+        default=0.0,
+        validation_alias=AliasChoices("tau", "_tau"),
+        description="Spectral tau used for this result.",
+    )
 
     @model_validator(mode="after")
     def _sync_body_content(self) -> "PromptSearchResult":
@@ -129,7 +150,7 @@ class PromptSearchResult(BaseModel):
             self.content = self.body
         return self
 
-    model_config = {"extra": "allow"}  # pass-through any extra fields from dataset
+    model_config = {"extra": "allow", "populate_by_name": True}
 
 
 class PromptSearchResponse(BaseModel):
