@@ -12,6 +12,7 @@ ArrowSpace spectral indexing, and MMR reranking with salience boosting.
 ## Install
 
 ```bash
+uv venv && uv sync
 # API server only (no NL embedding, no notebook deps)
 pip install -e .
 

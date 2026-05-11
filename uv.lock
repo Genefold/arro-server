@@ -211,11 +211,7 @@ dependencies = [
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "requests" },
-    { name = "sentence-transformers" },
     { name = "tinydb" },
-    { name = "torch" },
-    { name = "torchaudio" },
-    { name = "torchvision" },
     { name = "uvicorn", extra = ["standard"] },
     { name = "zarr" },
 ]
@@ -235,6 +231,12 @@ dev = [
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "ruff" },
+]
+nlp = [
+    { name = "sentence-transformers" },
+    { name = "torch" },
+    { name = "torchaudio" },
+    { name = "torchvision" },
 ]
 zarr = [
     { name = "fsspec" },
@@ -267,16 +269,16 @@ requires-dist = [
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23" },
     { name = "requests", specifier = ">=2.33.1" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.4" },
-    { name = "sentence-transformers", specifier = ">=5.3.0" },
+    { name = "sentence-transformers", marker = "extra == 'nlp'", specifier = ">=5.3.0" },
     { name = "tinydb", specifier = ">=4.8.2" },
-    { name = "torch" },
-    { name = "torchaudio" },
-    { name = "torchvision" },
+    { name = "torch", marker = "extra == 'nlp'" },
+    { name = "torchaudio", marker = "extra == 'nlp'" },
+    { name = "torchvision", marker = "extra == 'nlp'" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.27" },
     { name = "zarr", specifier = ">=3.0" },
     { name = "zarr", marker = "extra == 'zarr'", specifier = ">=3.0" },
 ]
-provides-extras = ["zarr", "arrow", "arrowspace", "dev"]
+provides-extras = ["zarr", "arrow", "arrowspace", "nlp", "dev"]
 
 [[package]]
 name = "arrowspace"
