@@ -1,5 +1,10 @@
 # arro-server
 
+[![Tests](https://github.com/Genefold/arro-server/actions/workflows/ci.yml/badge.svg)](https://github.com/Genefold/arro-server/actions)
+[![Python](https://img.shields.io/badge/python-3.11%2B-blue?logo=python&logoColor=white)](https://www.python.org/)
+[![License](https://img.shields.io/github/license/Genefold/arro-server)](LICENSE)
+[![Zarr v3](https://img.shields.io/badge/zarr-v3-orange?logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZmlsbD0id2hpdGUiIGQ9Ik0zIDNoMTh2MkgzVjN6bTAgNGgxOHYySDF6bTAgNGgxOHYySDN6bTAgNGgxOHYySDN6Ii8+PC9zdmc+)](https://zarr.dev)
+
 FastAPI server that exposes large datasets stored as **Zarr v3** trees and
 their **ArrowSpace**-derived metadata over HTTP. Designed as a reusable
 boilerplate for ArrowSpace / arrowspace infrastructure: clean adapter
