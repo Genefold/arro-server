@@ -6,7 +6,7 @@ every environment.  We never import it at module load — :func:`load` attempts
 the import lazily and returns a stub adapter that falls back to the sidecar
 JSON adapter.
 
-Real arrowspace API (confirmed from package introspection):
+Real arrowspace API (confirmed from package introspection)::
 
     from arrowspace import ArrowSpaceBuilder
     aspace, gl = ArrowSpaceBuilder().build(graph_params, np_array_float64)
@@ -42,14 +42,14 @@ Persistence (Phase 2)
 ---------------------
 After ``build_index()`` the adapter maintains a JSON manifest at
 ``{index_store}/index_manifest.json`` that maps ``dataset_id`` to its
-``{slug, graph_params}`` metadata.  On adapter startup
+``{dataset_name, graph_params}`` metadata.  On adapter startup
 ``reload_from_manifest()`` is called from the FastAPI lifespan hook to
 restore all previously-built indices into the LRU cache without recomputing.
 
 The persistence format uses ``arrowspace.load_arrowspace()`` which reads the
 Parquet files written by the Rust builder's ``with_persistence`` option.
-The slug is generated as ``dataset_{uuid}`` the first time an index is built,
-then recorded in the manifest so the same name is used on reload.
+The dataset_name is generated as ``{slug}_{uuid}`` the first time an index is
+built, then recorded in the manifest so the same name is used on reload.
 
 Note on ``build_and_store()`` vs ``build()``:
   ``ArrowSpaceBuilder.build_and_store()`` hardcodes the output directory to
@@ -112,6 +112,11 @@ class ArrowSpaceAdapter(ABC):
 
     @abstractmethod
     def delete_index(self, dataset_id: str, index_store: Path) -> bool: ...
+
+    @abstractmethod
+    def has_index(self, dataset_id: str) -> bool:
+        """Return True if dataset_id has a built index available in the cache."""
+        ...
 
     @abstractmethod
     def indexed_datasets(self) -> list[str]: ...
@@ -190,6 +195,9 @@ class _SidecarAdapter(ArrowSpaceAdapter):
     def delete_index(self, dataset_id: str, index_store: Path) -> bool:
         raise OptionalDependencyMissing("arrowspace", "delete_index")
 
+    def has_index(self, dataset_id: str) -> bool:
+        return False
+
     def indexed_datasets(self) -> list[str]:
         return []
 
@@ -253,6 +261,9 @@ class _UnavailableAdapter(ArrowSpaceAdapter):
 
     def delete_index(self, dataset_id, index_store):
         raise OptionalDependencyMissing("arrowspace", "delete_index")
+
+    def has_index(self, dataset_id: str) -> bool:
+        return False
 
     def indexed_datasets(self) -> list[str]:
         return []
@@ -401,6 +412,14 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
         """Generate a unique arrowspace dataset name for a given slug."""
         return f"{slug}_{uuid.uuid4().hex[:8]}"
 
+    # ------------------------------------------------------------------
+    # ABC: has_index
+    # ------------------------------------------------------------------
+
+    def has_index(self, dataset_id: str) -> bool:
+        """Return True if dataset_id has a built index in the LRU cache."""
+        return dataset_id in self._cache
+
     def _persist_csr(self, index_store: Path, slug: str, gl: Any, meta: dict[str, Any]) -> None:
         """Persist GraphLaplacian CSR arrays as Zarr for quick inspection/export.
 
@@ -499,6 +518,12 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
         Called from the FastAPI lifespan hook on server startup.  Safe to call
         when the manifest is absent (returns empty list) or when individual
         entries cannot be loaded (logs a warning, skips that entry).
+
+        Each manifest entry MUST have a ``dataset_name`` key (written by
+        ``build_index``).  Entries missing this key are unrecoverable — the
+        UUID suffix appended by ``_new_dataset_name`` means the bare slug will
+        never match the Parquet files on disk.  Such entries are skipped with
+        a warning rather than silently falling back to an incorrect path.
         """
         manifest = _read_manifest(index_store)
         if not manifest:
@@ -506,12 +531,19 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
             return []
         loaded: list[str] = []
         for dataset_id, info in manifest.items():
-            slug = info.get("dataset_name", self._slug(dataset_id))
+            dataset_name = info.get("dataset_name")
+            if not dataset_name:
+                log.warning(
+                    "Manifest entry for '%s' is missing 'dataset_name'; "
+                    "cannot reload — skipping (entry is unrecoverable without the UUID suffix)",
+                    dataset_id,
+                )
+                continue
             graph_params = info.get("graph_params", DEFAULT_GRAPH_PARAMS)
             try:
                 aspace, gl = self._mod.load_arrowspace(
                     storage_path=str(index_store),
-                    dataset_name=slug,
+                    dataset_name=dataset_name,
                     graph_params=graph_params,
                     energy=False,
                 )
@@ -527,9 +559,9 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
                 log.info("Reloaded index for '%s' from %s", dataset_id, index_store)
             except Exception:
                 log.warning(
-                    "Could not reload index for '%s' (slug='%s'); skipping",
+                    "Could not reload index for '%s' (dataset_name='%s'); skipping",
                     dataset_id,
-                    slug,
+                    dataset_name,
                     exc_info=True,
                 )
         return loaded
@@ -568,8 +600,12 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
             except Exception:
                 log.warning("Could not delete CSR dir %s", csr_dir, exc_info=True)
 
-        # Update manifest
-        if manifest != _read_manifest(index_store) or not existed:
+        # Always write the updated manifest when the entry existed, regardless
+        # of the on-disk state.  The previous guard re-read the manifest after
+        # pop(), so the on-disk copy still contained the entry, making the
+        # condition almost always True — but in the wrong direction.  This is
+        # simpler and always correct.
+        if existed:
             _write_manifest(index_store, manifest)
 
         return existed
@@ -592,9 +628,8 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
                 f"arrowspace requires a 2-D array (items x features); got shape {arr64.shape}"
             )
         slug = self._slug(dataset_id)
-        # Generate a stable dataset_name for this dataset_id.
-        # Re-use the existing name from the manifest if present so that
-        # rebuilding a dataset replaces the same Parquet files.
+        # Re-use the existing dataset_name from the manifest so that rebuilding
+        # a dataset replaces the same Parquet files on disk.
         manifest = _read_manifest(index_store)
         existing = manifest.get(dataset_id, {})
         dataset_name = existing.get("dataset_name") or self._new_dataset_name(slug)
@@ -646,11 +681,7 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
     # ------------------------------------------------------------------
 
     def _vec(self, query: dict[str, Any]) -> np.ndarray:
-        """Extract and validate 'vector' from query dict, return float64 array.
-
-        Raises HTTPException(422) if the value cannot be coerced to float64.
-        Raises MetadataUnavailable(404) if 'vector' key is absent.
-        """
+        """Extract and validate 'vector' from query dict, return float64 array."""
         vec = query.get("vector")
         if vec is None:
             raise MetadataUnavailable("'vector' is required in search body")
@@ -853,8 +884,7 @@ def load() -> ArrowSpaceAdapter:
 
     FIX: broadened except to catch Exception (not just ImportError) because
     the installed arrowspace package raises NameError in __init__.py when its
-    internal submodule reference fails — that is not an ImportError and was
-    previously crashing the server instead of gracefully falling back.
+    internal submodule reference fails.
     """
     from .settings import get_settings
 
@@ -864,13 +894,11 @@ def load() -> ArrowSpaceAdapter:
         cache_size = get_settings().index_cache_size
         log.info("arrowspace package found; using live adapter (cache_size=%d)", cache_size)
         return _ArrowSpaceAdapter(_mod, cache_size=cache_size)
-    except Exception:  # catches ImportError AND NameError from broken __init__
+    except Exception:
         log.info("arrowspace package not available; using sidecar adapter")
         return _SidecarAdapter()
 
 
 def reset_adapter_cache() -> None:
-    # Guard: load() may be monkey-patched in tests to a plain function
-    # that does not have .cache_clear(). Only call it when present.
     if hasattr(load, "cache_clear"):
         load.cache_clear()

@@ -38,11 +38,11 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from .. import __version__
-from ..arrowspace_adapter import DEFAULT_GRAPH_PARAMS, ArrowSpaceAdapter, _ArrowSpaceAdapter
+from ..arrowspace_adapter import DEFAULT_GRAPH_PARAMS, ArrowSpaceAdapter
 from ..arrowspace_adapter import load as load_arrowspace
 from ..errors import DatasetNotSliceable, InvalidSlice
 from ..settings import Settings, get_settings
-from ..slicing import enforce_window_budget, parse_slice
+from ..slicing import enforce_window_budget, parse_slice, trailing_product
 from ..storage import StorageRegistry, get_registry
 from ..storage.zarr_fs import zarr_available
 from .schemas import (
@@ -81,7 +81,6 @@ def health(settings: Settings = Depends(get_settings)) -> dict[str, Any]:
         "arrowspace_backend": adapter.backend,
         "arrowspace_available": adapter.available,
         "data_roots": list(settings.resolved_roots.keys()),
-        # Phase 2: list dataset IDs currently loaded in the LRU index cache
         "indexed_datasets": adapter.indexed_datasets(),
     }
 
@@ -98,6 +97,7 @@ def list_datasets(reg: StorageRegistry = Depends(_registry)) -> dict[str, Any]:
         "datasets": [
             {
                 "id": s.dataset_id,
+                "kind": "array",
                 "root": s.root,
                 "path": s.path,
                 "shape": list(s.shape),
@@ -128,7 +128,7 @@ def dataset_metadata(
 def dataset_data(
     dataset_id: str,
     offset: int = Query(default=0, ge=0),
-    limit: int = Query(default=None),
+    limit: int | None = Query(default=None),
     reg: StorageRegistry = Depends(_registry),
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
@@ -136,7 +136,9 @@ def dataset_data(
     effective_limit = limit if limit is not None else settings.default_window
     rs = parse_slice(None, h.summary.shape, offset=offset, limit=effective_limit)
     try:
-        enforce_window_budget(rs, settings.max_window)
+        # Window budget is scaled by the product of trailing dimensions so that
+        # multi-dimensional arrays are bounded by total element count, not rows.
+        enforce_window_budget(rs, settings.max_window * max(1, trailing_product(h.summary.shape)))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     arr = h.read_window(rs)
@@ -155,14 +157,14 @@ def dataset_data(
 @router.get("/datasets/{dataset_id:path}/slice")
 def dataset_slice(
     dataset_id: str,
-    slice: str = Query(...),
+    spec: str = Query(..., alias="slice"),
     reg: StorageRegistry = Depends(_registry),
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
     h = reg.open(dataset_id)
     try:
-        rs = parse_slice(slice, h.summary.shape)
-        enforce_window_budget(rs, settings.max_window)
+        rs = parse_slice(spec, h.summary.shape)
+        enforce_window_budget(rs, settings.max_window * max(1, trailing_product(h.summary.shape)))
     except InvalidSlice as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except DatasetNotSliceable as exc:
@@ -172,7 +174,7 @@ def dataset_slice(
     arr = h.read_window(rs)
     return {
         "id": dataset_id,
-        "slice": slice,
+        "slice": spec,
         "out_shape": list(arr.shape),
         "data": array_to_payload(arr),
     }
@@ -190,17 +192,29 @@ def dataset_stats(
     adapter: ArrowSpaceAdapter = Depends(_arrowspace),
 ) -> dict[str, Any]:
     h = reg.open(dataset_id)
-    if isinstance(adapter, _ArrowSpaceAdapter) and dataset_id in adapter._cache:
-        stats = adapter.stats_data(dataset_id)
-        return {"id": dataset_id, "backend": adapter.backend, "stats": stats}
+    # Use has_index() instead of reaching into _cache directly (encapsulation)
+    if adapter.has_index(dataset_id):
+        stats = adapter.stats_data(dataset_id)  # type: ignore[attr-defined]
+        return {
+            "id": dataset_id,
+            "backend": adapter.backend,
+            "arrowspace_available": adapter.available,
+            "stats": stats,
+        }
     try:
         data = adapter.sidecar_stats(h.fs_path)
-        return {"id": dataset_id, "backend": "sidecar", "stats": data}
+        return {
+            "id": dataset_id,
+            "backend": "sidecar",
+            "arrowspace_available": adapter.available,
+            "stats": data,
+        }
     except Exception:
         s = h.summary
         return {
             "id": dataset_id,
             "backend": "none",
+            "arrowspace_available": adapter.available,
             "stats": {"shape": list(s.shape), "dtype": s.dtype},
         }
 
@@ -212,14 +226,33 @@ def dataset_manifold(
     adapter: ArrowSpaceAdapter = Depends(_arrowspace),
 ) -> dict[str, Any]:
     h = reg.open(dataset_id)
-    if isinstance(adapter, _ArrowSpaceAdapter) and dataset_id in adapter._cache:
-        data = adapter.manifold_data(dataset_id)
-        return {"id": dataset_id, "backend": adapter.backend, "manifold": data}
+    # Use has_index() instead of reaching into _cache directly (encapsulation)
+    if adapter.has_index(dataset_id):
+        data = adapter.manifold_data(dataset_id)  # type: ignore[attr-defined]
+        return {
+            "id": dataset_id,
+            "backend": adapter.backend,
+            "arrowspace_available": adapter.available,
+            "source": "live",
+            "manifold": data,
+        }
     try:
         data = adapter.sidecar_manifold(h.fs_path)
-        return {"id": dataset_id, "backend": "sidecar", "manifold": data}
+        return {
+            "id": dataset_id,
+            "backend": "sidecar",
+            "arrowspace_available": adapter.available,
+            "source": "sidecar",
+            "manifold": data,
+        }
     except Exception:
-        return {"id": dataset_id, "backend": "none", "manifold": None}
+        return {
+            "id": dataset_id,
+            "backend": "none",
+            "arrowspace_available": adapter.available,
+            "source": "unavailable",
+            "manifold": None,
+        }
 
 
 @router.get("/datasets/{dataset_id:path}/search")
@@ -248,11 +281,7 @@ def build_index(
     settings: Settings = Depends(get_settings),
     adapter: ArrowSpaceAdapter = Depends(_arrowspace),
 ) -> dict[str, Any]:
-    """Build (or rebuild) the ArrowSpace graph-Laplacian index.
-
-    FIX: catch ValueError from adapter (e.g. 1-D array) and return 422.
-    FIX: response returns graph_params flat alongside nitems/nfeatures/nclusters.
-    """
+    """Build (or rebuild) the ArrowSpace graph-Laplacian index."""
     h = reg.open(dataset_id)
     rs = parse_slice(None, h.summary.shape, offset=0, limit=h.summary.shape[0])
     arr = h.read_window(rs)
@@ -418,9 +447,6 @@ def delete_index(
     - The ArrowSpace Parquet files written by the builder
     - The CSR Zarr directory
     - The entry from index_manifest.json
-
-    Use this endpoint to force a clean rebuild after the underlying Zarr
-    array has changed, or to free disk space.
 
     Returns 404 if no index exists for the given dataset ID.
     """

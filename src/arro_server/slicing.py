@@ -63,9 +63,6 @@ def _parse_axis(spec: str, length: int) -> slice | int:
             start += length
         start = max(0, min(start, length))
     if stop_s == "":
-        # For negative step we use None as the stop sentinel so that
-        # Python slice semantics handle index-0-inclusive correctly.
-        # _slice_length accounts for this via the None branch.
         stop = length if step > 0 else None
     else:
         stop = int(stop_s)
@@ -81,7 +78,6 @@ def _parse_axis(spec: str, length: int) -> slice | int:
 def _slice_length(s: slice) -> int:
     start, stop, step = s.start, s.stop, s.step
     if stop is None:
-        # Negative-step, stop omitted: slice runs from start down to index 0.
         return start + 1 if step == -1 else max(0, (start + 1 + (-step) - 1) // (-step))
     if step > 0:
         return max(0, (stop - start + step - 1) // step)
@@ -109,7 +105,6 @@ def parse_slice(
         except ValueError as exc:
             raise InvalidSlice(str(exc)) from exc
     else:
-        # offset/limit convenience: applies to leading axis only.
         sels: list[slice | int] = [slice(0, n, 1) for n in shape]
         if offset is not None or limit is not None:
             o = offset or 0
