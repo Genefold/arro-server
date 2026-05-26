@@ -201,11 +201,11 @@ def dataset_manifold(
     try:
         data = adapter.sidecar_manifold(h.dataset_path)
         return {"id": dataset_id, "backend": "sidecar", "manifold": data}
-    except Exception:
+    except Exception as exc:
         raise HTTPException(
             status_code=404,
             detail=f"No manifold data available for dataset '{dataset_id}'.",
-        )
+        ) from exc
 
 
 @router.get("/datasets/{dataset_id:path}/search")
