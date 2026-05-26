@@ -42,7 +42,7 @@ from ..arrowspace_adapter import DEFAULT_GRAPH_PARAMS, ArrowSpaceAdapter, _Arrow
 from ..arrowspace_adapter import load as load_arrowspace
 from ..errors import DatasetNotSliceable, InvalidSlice
 from ..settings import Settings, get_settings
-from ..slicing import enforce_window_budget, parse_slice, trailing_product
+from ..slicing import enforce_window_budget, parse_slice
 from ..storage import StorageRegistry, get_registry
 from ..storage.zarr_fs import zarr_available
 from .schemas import (

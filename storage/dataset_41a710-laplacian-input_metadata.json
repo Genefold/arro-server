@@ -1,0 +1,74 @@
+{
+  "name_id": "dataset_41a710-laplacian-input",
+  "timestamp": "2026-05-10T17:21:37.458518+00:00",
+  "n_rows": 2,
+  "n_cols": 8,
+  "builder_config": {
+    "nitems": {
+      "Usize": 30
+    },
+    "nfeatures": {
+      "Usize": 8
+    },
+    "normalise": {
+      "Bool": false
+    },
+    "lambda_k": {
+      "Usize": 6
+    },
+    "cluster_radius": {
+      "F64": 1.369018690681083
+    },
+    "rp_eps": {
+      "F64": 0.3
+    },
+    "sampling": {
+      "OptionSamplerType": {
+        "Simple": 0.6
+      }
+    },
+    "sparsity_check": {
+      "Bool": false
+    },
+    "lambda_topk": {
+      "Usize": 4
+    },
+    "prebuilt_spectral": {
+      "Bool": false
+    },
+    "synthesis": {
+      "TauMode": "Median"
+    },
+    "clustering_seed": {
+      "OptionU64": 15014140476590884273
+    },
+    "use_dims_reduction": {
+      "Bool": false
+    },
+    "lambda_p": {
+      "F64": 2.0
+    },
+    "lambda_sigma": {
+      "OptionF64": 1.0
+    },
+    "cluster_max_clusters": {
+      "OptionUsize": 2
+    },
+    "deterministic_clustering": {
+      "Bool": true
+    },
+    "lambda_eps": {
+      "F64": 1.0
+    }
+  },
+  "files": {
+    "matrix": {
+      "filename": "dataset_41a710-laplacian-input.parquet",
+      "file_type": "dense",
+      "rows": 2,
+      "cols": 8,
+      "nnz": null,
+      "size_bytes": 3399
+    }
+  }
+}

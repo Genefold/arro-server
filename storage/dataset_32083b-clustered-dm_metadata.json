@@ -1,0 +1,74 @@
+{
+  "name_id": "dataset_32083b-clustered-dm",
+  "timestamp": "2026-05-10T17:21:37.349594+00:00",
+  "n_rows": 2,
+  "n_cols": 8,
+  "builder_config": {
+    "deterministic_clustering": {
+      "Bool": true
+    },
+    "use_dims_reduction": {
+      "Bool": false
+    },
+    "prebuilt_spectral": {
+      "Bool": false
+    },
+    "lambda_sigma": {
+      "OptionF64": 1.0
+    },
+    "sparsity_check": {
+      "Bool": false
+    },
+    "cluster_radius": {
+      "F64": 1.312965636885521
+    },
+    "rp_eps": {
+      "F64": 0.3
+    },
+    "normalise": {
+      "Bool": false
+    },
+    "clustering_seed": {
+      "OptionU64": 17550850839104672448
+    },
+    "lambda_p": {
+      "F64": 2.0
+    },
+    "nfeatures": {
+      "Usize": 8
+    },
+    "lambda_topk": {
+      "Usize": 4
+    },
+    "nitems": {
+      "Usize": 30
+    },
+    "lambda_k": {
+      "Usize": 6
+    },
+    "sampling": {
+      "OptionSamplerType": {
+        "Simple": 0.6
+      }
+    },
+    "cluster_max_clusters": {
+      "OptionUsize": 2
+    },
+    "lambda_eps": {
+      "F64": 1.0
+    },
+    "synthesis": {
+      "TauMode": "Median"
+    }
+  },
+  "files": {
+    "matrix": {
+      "filename": "dataset_32083b-clustered-dm.parquet",
+      "file_type": "dense",
+      "rows": 2,
+      "cols": 8,
+      "nnz": null,
+      "size_bytes": 3384
+    }
+  }
+}

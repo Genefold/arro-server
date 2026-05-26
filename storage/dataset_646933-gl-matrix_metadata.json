@@ -1,0 +1,74 @@
+{
+  "name_id": "dataset_646933-gl-matrix",
+  "timestamp": "2026-05-10T17:42:18.687270+00:00",
+  "n_rows": 4,
+  "n_cols": 4,
+  "builder_config": {
+    "deterministic_clustering": {
+      "Bool": true
+    },
+    "cluster_radius": {
+      "F64": 1944.0
+    },
+    "normalise": {
+      "Bool": false
+    },
+    "lambda_eps": {
+      "F64": 1.0
+    },
+    "prebuilt_spectral": {
+      "Bool": false
+    },
+    "lambda_k": {
+      "Usize": 6
+    },
+    "nitems": {
+      "Usize": 50
+    },
+    "clustering_seed": {
+      "OptionU64": 17658247327951960030
+    },
+    "synthesis": {
+      "TauMode": "Median"
+    },
+    "lambda_p": {
+      "F64": 2.0
+    },
+    "use_dims_reduction": {
+      "Bool": false
+    },
+    "rp_eps": {
+      "F64": 0.3
+    },
+    "sparsity_check": {
+      "Bool": false
+    },
+    "sampling": {
+      "OptionSamplerType": {
+        "Simple": 0.6
+      }
+    },
+    "lambda_topk": {
+      "Usize": 4
+    },
+    "nfeatures": {
+      "Usize": 4
+    },
+    "lambda_sigma": {
+      "OptionF64": 1.0
+    },
+    "cluster_max_clusters": {
+      "OptionUsize": 5
+    }
+  },
+  "files": {
+    "matrix": {
+      "filename": "dataset_646933-gl-matrix.parquet",
+      "file_type": "sparse",
+      "rows": 4,
+      "cols": 4,
+      "nnz": 16,
+      "size_bytes": 2277
+    }
+  }
+}

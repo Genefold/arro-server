@@ -1,0 +1,74 @@
+{
+  "name_id": "dataset_4eaebb-lambdas",
+  "timestamp": "2026-05-10T17:42:35.781752+00:00",
+  "n_rows": 50,
+  "n_cols": 1,
+  "builder_config": {
+    "sparsity_check": {
+      "Bool": false
+    },
+    "lambda_topk": {
+      "Usize": 3
+    },
+    "lambda_sigma": {
+      "OptionF64": 0.5
+    },
+    "normalise": {
+      "Bool": false
+    },
+    "nitems": {
+      "Usize": 50
+    },
+    "lambda_eps": {
+      "F64": 0.5
+    },
+    "cluster_max_clusters": {
+      "OptionUsize": 5
+    },
+    "use_dims_reduction": {
+      "Bool": false
+    },
+    "lambda_k": {
+      "Usize": 4
+    },
+    "clustering_seed": {
+      "OptionU64": 12832700654347535197
+    },
+    "synthesis": {
+      "TauMode": "Median"
+    },
+    "cluster_radius": {
+      "F64": 1944.0
+    },
+    "lambda_p": {
+      "F64": 1.0
+    },
+    "sampling": {
+      "OptionSamplerType": {
+        "Simple": 0.6
+      }
+    },
+    "rp_eps": {
+      "F64": 0.3
+    },
+    "prebuilt_spectral": {
+      "Bool": false
+    },
+    "deterministic_clustering": {
+      "Bool": true
+    },
+    "nfeatures": {
+      "Usize": 4
+    }
+  },
+  "files": {
+    "lambda_vector": {
+      "filename": "dataset_4eaebb-lambdas.parquet",
+      "file_type": "lambda_vector",
+      "rows": 50,
+      "cols": 1,
+      "nnz": null,
+      "size_bytes": 2092
+    }
+  }
+}

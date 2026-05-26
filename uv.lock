@@ -187,9 +187,6 @@ dependencies = [
 arrow = [
     { name = "pyarrow" },
 ]
-arrowspace = [
-    { name = "arrowspace" },
-]
 dev = [
     { name = "fastapi", extra = ["standard"] },
     { name = "fsspec" },
@@ -199,19 +196,13 @@ dev = [
     { name = "pytest-asyncio" },
     { name = "ruff" },
 ]
-zarr = [
-    { name = "fsspec" },
-    { name = "zarr" },
-]
 
 [package.metadata]
 requires-dist = [
     { name = "arrowspace", specifier = ">=0.26.2" },
-    { name = "arrowspace", marker = "extra == 'arrowspace'" },
     { name = "fastapi", specifier = ">=0.110" },
     { name = "fastapi", extras = ["standard"], marker = "extra == 'dev'", specifier = ">=0.110" },
     { name = "fsspec", marker = "extra == 'dev'", specifier = ">=2024.2" },
-    { name = "fsspec", marker = "extra == 'zarr'", specifier = ">=2024.2" },
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.27" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "pre-commit", marker = "extra == 'dev'" },
@@ -223,9 +214,8 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.4" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.27" },
     { name = "zarr", specifier = ">=3.0" },
-    { name = "zarr", marker = "extra == 'zarr'", specifier = ">=3.0" },
 ]
-provides-extras = ["zarr", "arrow", "arrowspace", "dev"]
+provides-extras = ["arrow", "dev"]
 
 [[package]]
 name = "arrowspace"

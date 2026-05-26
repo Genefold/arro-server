@@ -1,0 +1,74 @@
+{
+  "name_id": "dataset_035020-raw_input",
+  "timestamp": "2026-05-10T17:41:38.360069+00:00",
+  "n_rows": 30,
+  "n_cols": 8,
+  "builder_config": {
+    "lambda_eps": {
+      "F64": 1.0
+    },
+    "lambda_sigma": {
+      "OptionF64": 1.0
+    },
+    "sampling": {
+      "OptionSamplerType": {
+        "Simple": 0.6
+      }
+    },
+    "prebuilt_spectral": {
+      "Bool": false
+    },
+    "deterministic_clustering": {
+      "Bool": true
+    },
+    "use_dims_reduction": {
+      "Bool": false
+    },
+    "rp_eps": {
+      "F64": 0.3
+    },
+    "clustering_seed": {
+      "OptionU64": 15569945298694364137
+    },
+    "synthesis": {
+      "TauMode": "Median"
+    },
+    "cluster_max_clusters": {
+      "OptionUsize": null
+    },
+    "lambda_p": {
+      "F64": 2.0
+    },
+    "cluster_radius": {
+      "F64": 1.0
+    },
+    "lambda_topk": {
+      "Usize": 4
+    },
+    "sparsity_check": {
+      "Bool": false
+    },
+    "normalise": {
+      "Bool": false
+    },
+    "nfeatures": {
+      "Usize": 8
+    },
+    "nitems": {
+      "Usize": 30
+    },
+    "lambda_k": {
+      "Usize": 6
+    }
+  },
+  "files": {
+    "matrix": {
+      "filename": "dataset_035020-raw_input.parquet",
+      "file_type": "dense",
+      "rows": 30,
+      "cols": 8,
+      "nnz": null,
+      "size_bytes": 5361
+    }
+  }
+}

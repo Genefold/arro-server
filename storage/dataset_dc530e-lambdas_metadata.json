@@ -1,0 +1,74 @@
+{
+  "name_id": "dataset_dc530e-lambdas",
+  "timestamp": "2026-05-10T17:41:22.186502+00:00",
+  "n_rows": 30,
+  "n_cols": 1,
+  "builder_config": {
+    "nitems": {
+      "Usize": 30
+    },
+    "cluster_max_clusters": {
+      "OptionUsize": 2
+    },
+    "lambda_sigma": {
+      "OptionF64": 1.0
+    },
+    "cluster_radius": {
+      "F64": 1.3912103691814235
+    },
+    "nfeatures": {
+      "Usize": 8
+    },
+    "lambda_p": {
+      "F64": 2.0
+    },
+    "rp_eps": {
+      "F64": 0.3
+    },
+    "use_dims_reduction": {
+      "Bool": false
+    },
+    "lambda_eps": {
+      "F64": 1.0
+    },
+    "sparsity_check": {
+      "Bool": false
+    },
+    "prebuilt_spectral": {
+      "Bool": false
+    },
+    "lambda_topk": {
+      "Usize": 4
+    },
+    "lambda_k": {
+      "Usize": 6
+    },
+    "sampling": {
+      "OptionSamplerType": {
+        "Simple": 0.6
+      }
+    },
+    "clustering_seed": {
+      "OptionU64": 17527035188108880381
+    },
+    "deterministic_clustering": {
+      "Bool": true
+    },
+    "synthesis": {
+      "TauMode": "Median"
+    },
+    "normalise": {
+      "Bool": false
+    }
+  },
+  "files": {
+    "lambda_vector": {
+      "filename": "dataset_dc530e-lambdas.parquet",
+      "file_type": "lambda_vector",
+      "rows": 30,
+      "cols": 1,
+      "nnz": null,
+      "size_bytes": 1807
+    }
+  }
+}

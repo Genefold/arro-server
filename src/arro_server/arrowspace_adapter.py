@@ -466,10 +466,7 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
             gp = graph_params
             if hasattr(builder, "with_lambda_graph") and hasattr(builder, "with_persistence"):
                 builder = (
-                    builder
-                    .with_lambda_graph(
-                        gp["eps"], gp["k"], gp["topk"], gp["p"], gp["sigma"]
-                    )
+                    builder.with_lambda_graph(gp["eps"], gp["k"], gp["topk"], gp["p"], gp["sigma"])
                     .with_sparsity_check(False)
                     .with_persistence(str(index_store), dataset_name)
                 )
@@ -564,6 +561,7 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
         csr_dir = index_store / slug
         if csr_dir.exists():
             import shutil
+
             try:
                 shutil.rmtree(str(csr_dir))
                 log.info("Deleted CSR Zarr directory %s", csr_dir)
@@ -603,7 +601,10 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
 
         log.info(
             "Building index for '%s' (dataset_name='%s') shape=%s params=%s",
-            dataset_id, dataset_name, arr64.shape, gp,
+            dataset_id,
+            dataset_name,
+            arr64.shape,
+            gp,
         )
         aspace, gl = self._mod.ArrowSpaceBuilder().build(gp, arr64)
         entry = _IndexEntry(
