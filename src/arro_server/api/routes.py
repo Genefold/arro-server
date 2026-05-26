@@ -93,7 +93,19 @@ def health(settings: Settings = Depends(get_settings)) -> dict[str, Any]:
 
 @router.get("/datasets")
 def list_datasets(reg: StorageRegistry = Depends(_registry)) -> dict[str, Any]:
-    return {"datasets": reg.list()}
+    entries = reg.list_datasets()
+    return {
+        "datasets": [
+            {
+                "id": s.dataset_id,
+                "root": s.root,
+                "path": s.path,
+                "shape": list(s.shape),
+                "dtype": s.dtype,
+            }
+            for s in entries
+        ]
+    }
 
 
 @router.get("/datasets/{dataset_id:path}/metadata")
@@ -108,7 +120,7 @@ def dataset_metadata(
         "shape": list(s.shape),
         "dtype": s.dtype,
         "chunks": list(s.chunks) if s.chunks else None,
-        "attrs": s.attrs,
+        "attrs": s.extra,
     }
 
 
@@ -123,15 +135,18 @@ def dataset_data(
     h = reg.open(dataset_id)
     effective_limit = limit if limit is not None else settings.default_window
     rs = parse_slice(None, h.summary.shape, offset=offset, limit=effective_limit)
-    rs = enforce_window_budget(rs, h.summary.shape, settings.max_window)
+    try:
+        enforce_window_budget(rs, settings.max_window)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     arr = h.read_window(rs)
-    next_off = rs.offset + rs.limit
-    if next_off >= h.summary.shape[0]:
+    next_off = rs.selectors[0].stop if isinstance(rs.selectors[0], slice) else None
+    if next_off is not None and next_off >= h.summary.shape[0]:
         next_off = None
     return {
         "id": dataset_id,
-        "offset": rs.offset,
-        "limit": rs.limit,
+        "offset": offset,
+        "limit": effective_limit,
         "next_offset": next_off,
         "data": array_to_payload(arr),
     }
@@ -147,11 +162,13 @@ def dataset_slice(
     h = reg.open(dataset_id)
     try:
         rs = parse_slice(slice, h.summary.shape)
+        enforce_window_budget(rs, settings.max_window)
     except InvalidSlice as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except DatasetNotSliceable as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    rs = enforce_window_budget(rs, h.summary.shape, settings.max_window)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     arr = h.read_window(rs)
     return {
         "id": dataset_id,
@@ -177,7 +194,7 @@ def dataset_stats(
         stats = adapter.stats_data(dataset_id)
         return {"id": dataset_id, "backend": adapter.backend, "stats": stats}
     try:
-        data = adapter.sidecar_stats(h.dataset_path)
+        data = adapter.sidecar_stats(h.fs_path)
         return {"id": dataset_id, "backend": "sidecar", "stats": data}
     except Exception:
         s = h.summary
@@ -199,13 +216,10 @@ def dataset_manifold(
         data = adapter.manifold_data(dataset_id)
         return {"id": dataset_id, "backend": adapter.backend, "manifold": data}
     try:
-        data = adapter.sidecar_manifold(h.dataset_path)
+        data = adapter.sidecar_manifold(h.fs_path)
         return {"id": dataset_id, "backend": "sidecar", "manifold": data}
-    except Exception as exc:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No manifold data available for dataset '{dataset_id}'.",
-        ) from exc
+    except Exception:
+        return {"id": dataset_id, "backend": "none", "manifold": None}
 
 
 @router.get("/datasets/{dataset_id:path}/search")
@@ -217,7 +231,7 @@ def dataset_search_sidecar(
     adapter: ArrowSpaceAdapter = Depends(_arrowspace),
 ) -> dict[str, Any]:
     h = reg.open(dataset_id)
-    results = adapter.sidecar_search(h.dataset_path, q, limit=limit)
+    results = adapter.sidecar_search(h.fs_path, q, limit=limit)
     return {"id": dataset_id, "query": q, "results": results}
 
 
@@ -269,7 +283,7 @@ def dataset_lambdas(
     adapter: ArrowSpaceAdapter = Depends(_arrowspace),
 ) -> dict[str, Any]:
     data = adapter.lambdas(dataset_id)
-    return {"id": dataset_id, "backend": adapter.backend, **data}
+    return {"id": dataset_id, "backend": adapter.backend, "arrowspace_available": adapter.available, **data}
 
 
 @router.get("/datasets/{dataset_id:path}/graph_laplacian")
@@ -307,7 +321,7 @@ def dataset_search(
     adapter: ArrowSpaceAdapter = Depends(_arrowspace),
 ) -> dict[str, Any]:
     data = adapter.search(dataset_id, body.model_dump())
-    return {"id": dataset_id, **data}
+    return {"id": dataset_id, "arrowspace_available": adapter.available, **data}
 
 
 @router.post("/datasets/{dataset_id:path}/search/energy")

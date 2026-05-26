@@ -22,6 +22,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .errors import InvalidSlice
+
 
 @dataclass(frozen=True)
 class ResolvedSlice:
@@ -99,10 +101,13 @@ def parse_slice(
     if spec:
         axis_specs = spec.split(",")
         if len(axis_specs) > rank:
-            raise ValueError(f"slice has {len(axis_specs)} axes, dataset has {rank}")
+            raise InvalidSlice(f"slice has {len(axis_specs)} axes, dataset has {rank}")
         while len(axis_specs) < rank:
             axis_specs.append("")
-        selectors = tuple(_parse_axis(a, shape[i]) for i, a in enumerate(axis_specs))
+        try:
+            selectors = tuple(_parse_axis(a, shape[i]) for i, a in enumerate(axis_specs))
+        except ValueError as exc:
+            raise InvalidSlice(str(exc)) from exc
     else:
         # offset/limit convenience: applies to leading axis only.
         sels: list[slice | int] = [slice(0, n, 1) for n in shape]
