@@ -1,0 +1,74 @@
+{
+  "name_id": "dataset_8cd16e-raw_input",
+  "timestamp": "2026-05-10T17:53:45.670408+00:00",
+  "n_rows": 30,
+  "n_cols": 8,
+  "builder_config": {
+    "clustering_seed": {
+      "OptionU64": 1905105684357730074
+    },
+    "nitems": {
+      "Usize": 30
+    },
+    "nfeatures": {
+      "Usize": 8
+    },
+    "prebuilt_spectral": {
+      "Bool": false
+    },
+    "sparsity_check": {
+      "Bool": false
+    },
+    "lambda_k": {
+      "Usize": 6
+    },
+    "lambda_p": {
+      "F64": 2.0
+    },
+    "deterministic_clustering": {
+      "Bool": true
+    },
+    "lambda_topk": {
+      "Usize": 4
+    },
+    "rp_eps": {
+      "F64": 0.3
+    },
+    "lambda_eps": {
+      "F64": 1.0
+    },
+    "cluster_radius": {
+      "F64": 1.0
+    },
+    "sampling": {
+      "OptionSamplerType": {
+        "Simple": 0.6
+      }
+    },
+    "synthesis": {
+      "TauMode": "Median"
+    },
+    "lambda_sigma": {
+      "OptionF64": 1.0
+    },
+    "normalise": {
+      "Bool": false
+    },
+    "use_dims_reduction": {
+      "Bool": false
+    },
+    "cluster_max_clusters": {
+      "OptionUsize": null
+    }
+  },
+  "files": {
+    "matrix": {
+      "filename": "dataset_8cd16e-raw_input.parquet",
+      "file_type": "dense",
+      "rows": 30,
+      "cols": 8,
+      "nnz": null,
+      "size_bytes": 5361
+    }
+  }
+}

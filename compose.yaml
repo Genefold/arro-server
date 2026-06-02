@@ -20,7 +20,16 @@ services:
       ARRO_SERVER_DATA_ROOTS: "main=/data"
       ARRO_SERVER_CORS_ORIGINS: "*"
       ARRO_SERVER_DEFAULT_WINDOW: "100"
+      # Phase 2: point index store at the named volume mount
+      ARRO_SERVER_INDEX_STORE: "/app/arrowspace_index"
     volumes:
       # Override on the CLI: DATA_DIR=/path/to/zarr docker compose up
       - "${DATA_DIR:-./example_data}:/data:ro,Z"
+      # Phase 2: persistent volume for ArrowSpace Parquet index files
+      - "arrow_index_store:/app/arrowspace_index"
     restart: unless-stopped
+
+volumes:
+  # Named volume so the ArrowSpace index survives container restarts.
+  # To wipe all indices: docker compose down -v
+  arrow_index_store:

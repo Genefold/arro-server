@@ -201,3 +201,15 @@ unavailable the sidecar adapter is still functional.
   `/slice`; address their member arrays by ID.
 - The sidecar `search` is a naive substring match against `id` and `tags`.
   Real vector / manifold search lands once `pyarrowspace` is wired up.
+
+
+
+
+
+
+
+
+
+
+
+

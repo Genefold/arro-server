@@ -1,0 +1,74 @@
+{
+  "name_id": "dataset_c19e91-clustered-dm",
+  "timestamp": "2026-05-10T17:49:40.059176+00:00",
+  "n_rows": 2,
+  "n_cols": 8,
+  "builder_config": {
+    "use_dims_reduction": {
+      "Bool": false
+    },
+    "prebuilt_spectral": {
+      "Bool": false
+    },
+    "cluster_max_clusters": {
+      "OptionUsize": 2
+    },
+    "lambda_sigma": {
+      "OptionF64": 1.0
+    },
+    "cluster_radius": {
+      "F64": 1.2675627120257436
+    },
+    "sparsity_check": {
+      "Bool": false
+    },
+    "lambda_k": {
+      "Usize": 6
+    },
+    "clustering_seed": {
+      "OptionU64": 16263132064160681469
+    },
+    "lambda_eps": {
+      "F64": 1.0
+    },
+    "rp_eps": {
+      "F64": 0.3
+    },
+    "synthesis": {
+      "TauMode": "Median"
+    },
+    "sampling": {
+      "OptionSamplerType": {
+        "Simple": 0.6
+      }
+    },
+    "nfeatures": {
+      "Usize": 8
+    },
+    "nitems": {
+      "Usize": 30
+    },
+    "lambda_topk": {
+      "Usize": 4
+    },
+    "lambda_p": {
+      "F64": 2.0
+    },
+    "normalise": {
+      "Bool": false
+    },
+    "deterministic_clustering": {
+      "Bool": true
+    }
+  },
+  "files": {
+    "matrix": {
+      "filename": "dataset_c19e91-clustered-dm.parquet",
+      "file_type": "dense",
+      "rows": 2,
+      "cols": 8,
+      "nnz": null,
+      "size_bytes": 3384
+    }
+  }
+}

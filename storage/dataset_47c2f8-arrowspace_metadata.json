@@ -1,0 +1,38 @@
+{
+  "range_lambdas": {
+    "F64": 0.26380773551611236
+  },
+  "n_clusters": {
+    "Usize": 2
+  },
+  "cluster_radius": {
+    "F64": 1.591542362521193
+  },
+  "pj_mtx_reduced_dim": {
+    "OptionUsize": null
+  },
+  "nitems": {
+    "Usize": 30
+  },
+  "min_lambdas": {
+    "F64": 0.26002046969823545
+  },
+  "nfeatures": {
+    "Usize": 8
+  },
+  "pj_mtx_seed": {
+    "OptionU64": null
+  },
+  "extra_reduced_dim": {
+    "Bool": false
+  },
+  "taumode": {
+    "TauMode": "Median"
+  },
+  "pj_mtx_original_dim": {
+    "OptionUsize": null
+  },
+  "max_lambdas": {
+    "F64": 0.5238282052143478
+  }
+}

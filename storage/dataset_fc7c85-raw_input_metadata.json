@@ -1,0 +1,74 @@
+{
+  "name_id": "dataset_fc7c85-raw_input",
+  "timestamp": "2026-05-10T17:49:39.912529+00:00",
+  "n_rows": 50,
+  "n_cols": 4,
+  "builder_config": {
+    "nitems": {
+      "Usize": 50
+    },
+    "lambda_k": {
+      "Usize": 6
+    },
+    "sparsity_check": {
+      "Bool": false
+    },
+    "lambda_topk": {
+      "Usize": 4
+    },
+    "lambda_p": {
+      "F64": 2.0
+    },
+    "prebuilt_spectral": {
+      "Bool": false
+    },
+    "nfeatures": {
+      "Usize": 4
+    },
+    "clustering_seed": {
+      "OptionU64": 15883295010577215797
+    },
+    "synthesis": {
+      "TauMode": "Median"
+    },
+    "normalise": {
+      "Bool": false
+    },
+    "sampling": {
+      "OptionSamplerType": {
+        "Simple": 0.6
+      }
+    },
+    "cluster_radius": {
+      "F64": 1.0
+    },
+    "lambda_sigma": {
+      "OptionF64": 1.0
+    },
+    "lambda_eps": {
+      "F64": 1.0
+    },
+    "deterministic_clustering": {
+      "Bool": true
+    },
+    "cluster_max_clusters": {
+      "OptionUsize": null
+    },
+    "rp_eps": {
+      "F64": 0.3
+    },
+    "use_dims_reduction": {
+      "Bool": false
+    }
+  },
+  "files": {
+    "matrix": {
+      "filename": "dataset_fc7c85-raw_input.parquet",
+      "file_type": "dense",
+      "rows": 50,
+      "cols": 4,
+      "nnz": null,
+      "size_bytes": 3179
+    }
+  }
+}

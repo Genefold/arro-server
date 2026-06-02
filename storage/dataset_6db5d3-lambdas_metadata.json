@@ -1,0 +1,74 @@
+{
+  "name_id": "dataset_6db5d3-lambdas",
+  "timestamp": "2026-05-10T17:41:22.320083+00:00",
+  "n_rows": 30,
+  "n_cols": 1,
+  "builder_config": {
+    "synthesis": {
+      "TauMode": "Median"
+    },
+    "nfeatures": {
+      "Usize": 8
+    },
+    "lambda_k": {
+      "Usize": 6
+    },
+    "sparsity_check": {
+      "Bool": false
+    },
+    "cluster_radius": {
+      "F64": 1.3675597361703247
+    },
+    "lambda_eps": {
+      "F64": 1.0
+    },
+    "sampling": {
+      "OptionSamplerType": {
+        "Simple": 0.6
+      }
+    },
+    "lambda_topk": {
+      "Usize": 4
+    },
+    "deterministic_clustering": {
+      "Bool": true
+    },
+    "nitems": {
+      "Usize": 30
+    },
+    "lambda_sigma": {
+      "OptionF64": 1.0
+    },
+    "use_dims_reduction": {
+      "Bool": false
+    },
+    "lambda_p": {
+      "F64": 2.0
+    },
+    "rp_eps": {
+      "F64": 0.3
+    },
+    "prebuilt_spectral": {
+      "Bool": false
+    },
+    "cluster_max_clusters": {
+      "OptionUsize": 2
+    },
+    "clustering_seed": {
+      "OptionU64": 12552631469181409947
+    },
+    "normalise": {
+      "Bool": false
+    }
+  },
+  "files": {
+    "lambda_vector": {
+      "filename": "dataset_6db5d3-lambdas.parquet",
+      "file_type": "lambda_vector",
+      "rows": 30,
+      "cols": 1,
+      "nnz": null,
+      "size_bytes": 1807
+    }
+  }
+}

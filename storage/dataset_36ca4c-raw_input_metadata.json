@@ -1,0 +1,74 @@
+{
+  "name_id": "dataset_36ca4c-raw_input",
+  "timestamp": "2026-05-10T17:29:44.144025+00:00",
+  "n_rows": 30,
+  "n_cols": 8,
+  "builder_config": {
+    "lambda_p": {
+      "F64": 2.0
+    },
+    "sampling": {
+      "OptionSamplerType": {
+        "Simple": 0.6
+      }
+    },
+    "lambda_k": {
+      "Usize": 6
+    },
+    "cluster_radius": {
+      "F64": 1.0
+    },
+    "rp_eps": {
+      "F64": 0.3
+    },
+    "cluster_max_clusters": {
+      "OptionUsize": null
+    },
+    "nfeatures": {
+      "Usize": 8
+    },
+    "sparsity_check": {
+      "Bool": false
+    },
+    "deterministic_clustering": {
+      "Bool": true
+    },
+    "lambda_topk": {
+      "Usize": 4
+    },
+    "synthesis": {
+      "TauMode": "Median"
+    },
+    "lambda_eps": {
+      "F64": 1.0
+    },
+    "use_dims_reduction": {
+      "Bool": false
+    },
+    "prebuilt_spectral": {
+      "Bool": false
+    },
+    "normalise": {
+      "Bool": false
+    },
+    "nitems": {
+      "Usize": 30
+    },
+    "clustering_seed": {
+      "OptionU64": 12725955480817823449
+    },
+    "lambda_sigma": {
+      "OptionF64": 1.0
+    }
+  },
+  "files": {
+    "matrix": {
+      "filename": "dataset_36ca4c-raw_input.parquet",
+      "file_type": "dense",
+      "rows": 30,
+      "cols": 8,
+      "nnz": null,
+      "size_bytes": 5361
+    }
+  }
+}
