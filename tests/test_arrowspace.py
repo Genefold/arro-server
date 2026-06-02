@@ -49,7 +49,7 @@ NFEATURES = 4
 NCLUSTERS = 2
 GRAPH_PARAMS = {"eps": 1.0, "k": 6, "topk": 3, "p": 2.0, "sigma": 1.0}
 
-# Deterministic 10×4 float64 array — used everywhere
+# Deterministic 10x4 float64 array -- used everywhere
 FIXTURE_ARRAY = np.arange(NITEMS * NFEATURES, dtype=np.float64).reshape(NITEMS, NFEATURES)
 
 FAKE_LAMBDAS = [float(i) * 0.1 for i in range(NITEMS)]
@@ -118,6 +118,26 @@ def _make_fake_arrowspace_module() -> types.ModuleType:
     return fake_mod
 
 
+def _make_tracking_arrowspace_module() -> types.ModuleType:
+    """Return a fake arrowspace module that counts build() calls.
+
+    Used to verify that ``build_index`` calls the builder exactly once.
+    """
+    fake_mod = types.ModuleType("arrowspace")
+    aspace = _make_fake_aspace()
+    gl = _make_fake_gl()
+
+    class TrackingBuilder:
+        build_count: int = 0
+
+        def build(self, graph_params, array):
+            TrackingBuilder.build_count += 1
+            return aspace, gl
+
+    fake_mod.ArrowSpaceBuilder = TrackingBuilder  # type: ignore[attr-defined]
+    return fake_mod
+
+
 # ---------------------------------------------------------------------------
 # Shared adapter fixture (unit tests)
 # ---------------------------------------------------------------------------
@@ -141,6 +161,15 @@ def built_adapter(adapter, tmp_path: Path):
     """An adapter with one pre-built index ('test/ds')."""
     adapter.build_index("test/ds", FIXTURE_ARRAY.copy(), tmp_path)
     return adapter
+
+
+@pytest.fixture
+def tracking_adapter(tmp_path: Path):
+    """An adapter backed by the tracking builder module."""
+    from arro_server.arrowspace_adapter import _ArrowSpaceAdapter
+
+    track_mod = _make_tracking_arrowspace_module()
+    return _ArrowSpaceAdapter(track_mod, cache_size=4), track_mod
 
 
 # ---------------------------------------------------------------------------
@@ -261,6 +290,35 @@ class TestAdapterBuildIndex:
         assert meta["nfeatures"] == NFEATURES
         assert "csr_shape" in meta, f"expected csr_shape in meta.json, got keys: {list(meta)}"
         assert meta["csr_shape"] == [NITEMS, NITEMS]
+
+
+class TestAdapterSingleBuild:
+    """Verifies that build_index calls the builder exactly once (no double build)."""
+
+    def test_build_called_once(self, tracking_adapter, tmp_path):
+        adapter, track_mod = tracking_adapter
+        stub = track_mod.ArrowSpaceBuilder
+        stub.build_count = 0
+        adapter.build_index("test/ds", FIXTURE_ARRAY.copy(), tmp_path)
+        assert stub.build_count == 1, (
+            f"Expected 1 build() call, got {stub.build_count} — "
+            "build_index must not call the builder more than once"
+        )
+
+    def test_multiple_builds_each_call_once(self, tracking_adapter, tmp_path):
+        adapter, track_mod = tracking_adapter
+        stub = track_mod.ArrowSpaceBuilder
+        stub.build_count = 0
+        adapter.build_index("ds1", FIXTURE_ARRAY.copy(), tmp_path)
+        assert stub.build_count == 1
+        adapter.build_index("ds2", FIXTURE_ARRAY.copy(), tmp_path)
+        assert stub.build_count == 2
+
+    def test_cache_populated_after_build(self, adapter, tmp_path):
+        adapter.build_index("test/ds", FIXTURE_ARRAY.copy(), tmp_path)
+        assert adapter.has_index("test/ds")
+        info = adapter.graph_laplacian_info("test/ds")
+        assert info["nnodes"] == NITEMS
 
 
 class TestAdapterLambdas:
@@ -559,9 +617,7 @@ class TestIndexLifecycle:
     # Artifacts land at: tmp_index_store / DATASET_SLUG / {data,indices,indptr}.zarr
     # -----------------------------------------------------------------------
 
-    def test_build_index_creates_zzarr_files(
-        self, tmp_index_store: Path, live_client: TestClient
-    ):
+    def test_build_index_creates_zzarr_files(self, tmp_index_store: Path, live_client: TestClient):
         """POST /index must create the ArrowSpace index artifacts on disk."""
         live_client.post(f"/api/datasets/{DATASET_ID}/index")
         slug_dir = tmp_index_store / DATASET_SLUG
@@ -570,9 +626,7 @@ class TestIndexLifecycle:
         assert (slug_dir / "indptr.zarr").exists(), f"indptr.zarr missing in {slug_dir}"
         assert (slug_dir / "meta.json").exists(), f"meta.json missing in {slug_dir}"
 
-    def test_build_index_meta_json_content(
-        self, tmp_index_store: Path, live_client: TestClient
-    ):
+    def test_build_index_meta_json_content(self, tmp_index_store: Path, live_client: TestClient):
         """meta.json written by POST /index must contain nitems and csr_shape.
 
         Note: graph_params is returned in the HTTP response body by the route

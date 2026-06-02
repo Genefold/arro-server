@@ -192,3 +192,9 @@ __marimo__/
 .streamlit/secrets.toml
 example_data/
 /tmp/srv.log
+
+
+storage/
+
+opencode.json
+.bootstrapignore 

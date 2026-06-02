@@ -458,15 +458,20 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
         except Exception:
             log.warning("Failed to persist CSR for '%s'", slug, exc_info=True)
 
-    def _persist_parquet(
+    def _build_with_persistence(
         self,
         index_store: Path,
         dataset_name: str,
         array: np.ndarray,
         graph_params: dict[str, Any],
-    ) -> None:
-        """Build and persist ArrowSpace Parquet files via the builder's
-        ``with_persistence`` option.
+    ) -> tuple[Any, Any]:
+        """Build ArrowSpace index and persist Parquet in a single call.
+
+        Uses the builder's ``with_persistence`` option so that the on-disk
+        files are guaranteed identical to the in-memory result.  Falls back
+        to a bare ``build()`` when the installed arrowspace version does
+        not expose ``with_persistence`` (Phase 1 behaviour — index lives
+        in memory only).
 
         We cannot use ``build_and_store()`` directly because its Rust
         implementation hardcodes the output path to ``CWD/storage/``.
@@ -474,11 +479,8 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
         before calling ``build()``, which triggers the same Parquet write path
         but respects the configured ``index_store``.
 
-        If the arrowspace builder does not expose ``with_persistence`` in the
-        installed version, this step is skipped with a warning and the index
-        will not survive a server restart (Phase 1 behaviour).
+        Returns the ``(aspace, gl)`` tuple from the single build call.
         """
-        index_store.mkdir(parents=True, exist_ok=True)
         rows: list[list[float]] = array.tolist()
         try:
             builder = self._mod.ArrowSpaceBuilder()
@@ -489,24 +491,27 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
                     .with_sparsity_check(False)
                     .with_persistence(str(index_store), dataset_name)
                 )
-                builder.build(rows)
+                aspace, gl = builder.build(rows)
                 log.info(
                     "Persisted ArrowSpace Parquet for '%s' at %s",
                     dataset_name,
                     index_store,
                 )
-            else:
-                log.warning(
-                    "ArrowSpaceBuilder does not expose with_persistence; "
-                    "index for '%s' will not survive restart",
-                    dataset_name,
-                )
+                return aspace, gl
+
+            log.warning(
+                "ArrowSpaceBuilder does not expose with_persistence; "
+                "index for '%s' will not survive restart",
+                dataset_name,
+            )
+            return builder.build(gp, array)
         except Exception:
             log.warning(
-                "Failed to persist Parquet for '%s'; index lives in memory only",
+                "Failed to persist Parquet for '%s'; building in memory only",
                 dataset_name,
                 exc_info=True,
             )
+            return self._mod.ArrowSpaceBuilder().build(graph_params, array)
 
     # ------------------------------------------------------------------
     # Phase 2 — public persistence API
@@ -628,6 +633,7 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
                 f"arrowspace requires a 2-D array (items x features); got shape {arr64.shape}"
             )
         slug = self._slug(dataset_id)
+        index_store.mkdir(parents=True, exist_ok=True)
         # Re-use the existing dataset_name from the manifest so that rebuilding
         # a dataset replaces the same Parquet files on disk.
         manifest = _read_manifest(index_store)
@@ -641,7 +647,10 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
             arr64.shape,
             gp,
         )
-        aspace, gl = self._mod.ArrowSpaceBuilder().build(gp, arr64)
+
+        # Single build: persist Parquet AND get the in-memory result in one call
+        aspace, gl = self._build_with_persistence(index_store, dataset_name, arr64, gp)
+
         entry = _IndexEntry(
             aspace=aspace,
             gl=gl,
@@ -658,9 +667,6 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
 
         # Persist CSR (supplementary, for export/inspection)
         self._persist_csr(index_store, slug, gl, meta)
-
-        # Persist full ArrowSpace Parquet (for reload on restart)
-        self._persist_parquet(index_store, dataset_name, arr64, gp)
 
         # Update manifest
         manifest[dataset_id] = {"dataset_name": dataset_name, "graph_params": gp}

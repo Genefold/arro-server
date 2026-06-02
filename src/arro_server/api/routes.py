@@ -312,7 +312,12 @@ def dataset_lambdas(
     adapter: ArrowSpaceAdapter = Depends(_arrowspace),
 ) -> dict[str, Any]:
     data = adapter.lambdas(dataset_id)
-    return {"id": dataset_id, "backend": adapter.backend, "arrowspace_available": adapter.available, **data}
+    return {
+        "id": dataset_id,
+        "backend": adapter.backend,
+        "arrowspace_available": adapter.available,
+        **data,
+    }
 
 
 @router.get("/datasets/{dataset_id:path}/graph_laplacian")
