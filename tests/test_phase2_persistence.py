@@ -121,7 +121,9 @@ def live_client(tmp_path: Path, fake_mod: types.ModuleType):
     root_dir = tmp_path / "data"
     root_dir.mkdir()
     ds_path = root_dir / "matrix"
-    arr = zarr.open(str(ds_path), mode="w", shape=(NITEMS, NFEATURES), chunks=(5, NFEATURES), dtype="float64")
+    arr = zarr.open(
+        str(ds_path), mode="w", shape=(NITEMS, NFEATURES), chunks=(5, NFEATURES), dtype="float64"
+    )
     arr[:] = FIXTURE_ARRAY
 
     index_store = tmp_path / "index_store"
@@ -245,7 +247,7 @@ class TestLRUCacheKeys:
         cache.put("a", self._make_entry())
         cache.put("b", self._make_entry())
         cache.put("c", self._make_entry())  # evicts "a" (LRU)
-        assert "a" not in cache.keys()
+        assert "a" not in cache
         assert set(cache.keys()) == {"b", "c"}
 
 
@@ -414,7 +416,9 @@ class TestReloadFromManifest:
         from arro_server.arrowspace_adapter import _write_manifest
 
         # Our fake module has no load_arrowspace function, so this will raise.
-        _write_manifest(tmp_store, {"some/ds": {"dataset_name": "some_ds_abc123", "graph_params": GRAPH_PARAMS}})
+        _write_manifest(
+            tmp_store, {"some/ds": {"dataset_name": "some_ds_abc123", "graph_params": GRAPH_PARAMS}}
+        )
         result = adapter.reload_from_manifest(tmp_store)
         # The entry load failed, so it must not appear in the loaded list.
         assert "some/ds" not in result

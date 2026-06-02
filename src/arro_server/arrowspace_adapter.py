@@ -908,3 +908,7 @@ def load() -> ArrowSpaceAdapter:
 def reset_adapter_cache() -> None:
     if hasattr(load, "cache_clear"):
         load.cache_clear()
+
+
+# Public alias for the no-op adapter (test compatibility)
+_NullAdapter = _UnavailableAdapter

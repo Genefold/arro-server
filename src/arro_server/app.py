@@ -6,13 +6,14 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import __version__
 from .api import router as api_router
+from .errors import MetadataUnavailable, OptionalDependencyMissing
 from .settings import Settings, get_settings
 
 log = logging.getLogger(__name__)
@@ -69,6 +70,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_headers=["*"],
     )
     app.include_router(api_router)
+
+    @app.exception_handler(MetadataUnavailable)
+    async def _metadata_unavailable_handler(
+        request: Request, exc: MetadataUnavailable
+    ) -> JSONResponse:
+        return JSONResponse(status_code=404, content={"detail": str(exc)})
+
+    @app.exception_handler(OptionalDependencyMissing)
+    async def _optional_dependency_missing_handler(
+        request: Request, exc: OptionalDependencyMissing
+    ) -> JSONResponse:
+        return JSONResponse(status_code=503, content={"detail": str(exc)})
 
     @app.get("/", include_in_schema=False)
     def _root() -> dict[str, str]:

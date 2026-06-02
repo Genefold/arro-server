@@ -203,6 +203,9 @@ def dataset_stats(
         }
     try:
         data = adapter.sidecar_stats(h.fs_path)
+        s = h.summary
+        data.setdefault("shape", list(s.shape))
+        data.setdefault("dtype", s.dtype)
         return {
             "id": dataset_id,
             "backend": "sidecar",
