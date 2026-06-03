@@ -4,7 +4,7 @@ All routes are mounted under the /api prefix.
 Dataset IDs use '--' as the root/path separator (e.g. 'main--matrix').
 
 Endpoint map
-------------
+-----------
 GET  /api/health
 GET  /api/datasets
 GET  /api/datasets/{id}/metadata
@@ -19,7 +19,7 @@ GET  /api/datasets/{id}/lambdas              -- eigenvalue distribution
 GET  /api/datasets/{id}/graph_laplacian      -- GL metadata
 GET  /api/datasets/{id}/items                -- all items from index
 GET  /api/datasets/{id}/items/{n}            -- single item
-POST /api/datasets/{id}/search               -- spectral vector search
+POST /api/datasets/{id}/search               -- unified spectral vector search with mode selector
 POST /api/datasets/{id}/search/energy        -- energy vector search
 POST /api/datasets/{id}/search/hybrid        -- hybrid vector search
 POST /api/datasets/{id}/search/linear        -- linear sorted search
@@ -28,6 +28,8 @@ GET  /api/datasets/{id}/spot/motives/eigen
 GET  /api/datasets/{id}/spot/motives/energy
 GET  /api/datasets/{id}/spot/subgraphs/centroids
 GET  /api/datasets/{id}/spot/subgraphs/motives
+GET  /api/datasets/{id}/graph?fmt=csr|dense                -- Laplacian matrix export
+GET  /api/datasets/{id}/spectral_metrics                   -- full spectral analytics
 """
 
 from __future__ import annotations
@@ -40,7 +42,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from .. import __version__
 from ..arrowspace_adapter import DEFAULT_GRAPH_PARAMS, ArrowSpaceAdapter
 from ..arrowspace_adapter import load as load_arrowspace
-from ..errors import DatasetNotSliceable, InvalidSlice
+from ..errors import DatasetNotSliceable, InvalidSlice, OptionalDependencyMissing
 from ..settings import Settings, get_settings
 from ..slicing import enforce_window_budget, parse_slice, trailing_product
 from ..storage import StorageRegistry, get_registry
@@ -51,7 +53,7 @@ from .schemas import (
     SearchEnergyRequest,
     SearchHybridRequest,
     SearchLinearRequest,
-    SearchRequest,
+    SearchModeRequest,
 )
 from .serializers import array_to_payload
 
@@ -351,16 +353,6 @@ def dataset_get_item(
     return {"id": dataset_id, "backend": adapter.backend, **data}
 
 
-@router.post("/datasets/{dataset_id:path}/search")
-def dataset_search(
-    dataset_id: str,
-    body: SearchRequest,
-    adapter: ArrowSpaceAdapter = Depends(_arrowspace),
-) -> dict[str, Any]:
-    data = adapter.search(dataset_id, body.model_dump())
-    return {"id": dataset_id, "arrowspace_available": adapter.available, **data}
-
-
 @router.post("/datasets/{dataset_id:path}/search/energy")
 def dataset_search_energy(
     dataset_id: str,
@@ -397,8 +389,11 @@ def dataset_search_batch(
     body: SearchBatchRequest,
     adapter: ArrowSpaceAdapter = Depends(_arrowspace),
 ) -> dict[str, Any]:
-    data = adapter.search_batch(dataset_id, body.model_dump())
-    return {"id": dataset_id, **data}
+    try:
+        data = adapter.search_batch(dataset_id, body.model_dump())
+        return {"id": dataset_id, **data}
+    except OptionalDependencyMissing as exc:
+        raise HTTPException(status_code=501, detail=str(exc)) from exc
 
 
 @router.get("/datasets/{dataset_id:path}/spot/motives/eigen")
@@ -435,6 +430,75 @@ def dataset_spot_subg_motives(
 ) -> dict[str, Any]:
     data = adapter.spot_subg_motives(dataset_id)
     return {"id": dataset_id, "backend": adapter.backend, **data}
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 — Analytics endpoints
+# ---------------------------------------------------------------------------
+
+
+@router.get("/datasets/{dataset_id:path}/graph")
+def dataset_graph(
+    dataset_id: str,
+    fmt: str = Query("csr", description="'csr' | 'dense'"),
+    adapter: ArrowSpaceAdapter = Depends(_arrowspace),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    if fmt not in ("csr", "dense"):
+        raise HTTPException(status_code=422, detail="fmt must be 'csr' or 'dense'")
+    try:
+        result = adapter.graph_export(dataset_id, fmt)
+        if fmt == "dense":
+            nnodes = result.get("nnodes", 0)
+            if nnodes > settings.max_window:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"Dense export requires {nnodes * nnodes:,} floats "
+                        f"(nnodes={nnodes} exceeds max_window={settings.max_window}). "
+                        "Use fmt=csr instead."
+                    ),
+                )
+        return result
+    except OptionalDependencyMissing as exc:
+        raise HTTPException(status_code=501, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/datasets/{dataset_id:path}/spectral_metrics")
+def dataset_spectral_metrics(
+    dataset_id: str,
+    adapter: ArrowSpaceAdapter = Depends(_arrowspace),
+) -> dict[str, Any]:
+    try:
+        return adapter.spectral_metrics(dataset_id)
+    except OptionalDependencyMissing as exc:
+        raise HTTPException(status_code=501, detail=str(exc)) from exc
+
+
+@router.post("/datasets/{dataset_id:path}/search")
+def dataset_search(
+    dataset_id: str,
+    body: SearchModeRequest,
+    adapter: ArrowSpaceAdapter = Depends(_arrowspace),
+) -> dict[str, Any]:
+    q_dict = {
+        "vector": body.vector,
+        "mode": body.mode,
+        "tau": body.tau,
+        "alpha": body.alpha,
+        "k": body.k,
+    }
+    try:
+        result = adapter.search_with_mode(dataset_id, q_dict)
+        return {"id": dataset_id, "arrowspace_available": adapter.available, **result}
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except OptionalDependencyMissing:
+        raise HTTPException(
+            status_code=501, detail="search_with_mode requires arrowspace"
+        ) from None
 
 
 # ---------------------------------------------------------------------------

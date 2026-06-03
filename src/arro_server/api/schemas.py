@@ -7,7 +7,7 @@ missing or wrongly-typed fields — before the route body ever runs.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -15,13 +15,6 @@ from pydantic import BaseModel, Field, model_validator
 # If an incoming IndexBuildRequest body contains ONLY these keys (flat),
 # we hoist the whole body into {"graph_params": <body>} automatically.
 _GRAPH_PARAM_KEYS = frozenset({"eps", "k", "topk", "p", "sigma"})
-
-
-class SearchRequest(BaseModel):
-    """Body for POST /datasets/{id}/search (spectral taumode search)."""
-
-    vector: list[float] = Field(..., description="Query vector (float64 values).")
-    tau: float = Field(1.0, description="Taumode tau parameter.")
 
 
 class SearchEnergyRequest(BaseModel):
@@ -94,3 +87,15 @@ class IndexBuildRequest(BaseModel):
         if values.keys() <= _GRAPH_PARAM_KEYS:
             return {"graph_params": values}
         return values
+
+
+class SearchModeRequest(BaseModel):
+    """Body for POST /datasets/{id}/search (unified search with mode selector)."""
+
+    vector: list[float] = Field(..., description="Query vector.")
+    mode: Literal["taumode", "hybrid", "energy", "linear_sorted"] = Field(
+        "taumode", description="Search mode: taumode | hybrid | energy | linear_sorted"
+    )
+    tau: float = Field(1.0, description="Tau param for taumode.")
+    alpha: float = Field(0.5, ge=0.0, le=1.0, description="Blend for hybrid mode.")
+    k: int = Field(10, ge=1, description="Top-k for energy and linear_sorted.")
