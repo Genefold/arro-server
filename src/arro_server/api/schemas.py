@@ -7,7 +7,7 @@ missing or wrongly-typed fields — before the route body ever runs.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -96,77 +96,11 @@ class IndexBuildRequest(BaseModel):
         return values
 
 
-# ---------------------------------------------------------------------------
-# Phase 3 — Analytics schemas
-# ---------------------------------------------------------------------------
-
-
-class GraphExportResponse(BaseModel):
-    """Response for GET /datasets/{id}/graph."""
-
-    dataset_id: str
-    fmt: str  # "csr" | "dense"
-    data: list[float] | None = None
-    indices: list[int] | None = None
-    indptr: list[int] | None = None
-    shape: list[int] | None = None
-    matrix: list[list[float]] | None = None
-    nnodes: int | None = None
-
-
-class SpectralMetricsResponse(BaseModel):
-    """Response for GET /datasets/{id}/spectral_metrics."""
-
-    dataset_id: str
-    nitems: int
-    nclusters: int
-    lambda_min: float
-    lambda_max: float
-    lambda_mean: float
-    lambda_std: float
-    lambda_sum: float
-    spectral_gap: float
-    fiedler_value: float
-    algebraic_connectivity: float
-    lambdas_sorted: list[list[float]]
-    lambda_percentiles: dict[str, float]
-    spectral_energy_total: float
-    spectral_energy_norm: float
-
-
-class MotiveHit(BaseModel):
-    index: int
-    score: float
-
-
-class MotivesResponse(BaseModel):
-    """Response for GET /datasets/{id}/motives."""
-
-    dataset_id: str
-    mode: str
-    motives: list[MotiveHit]
-    count: int
-
-
-class SubgraphHit(BaseModel):
-    index: int
-    score: float
-
-
-class SubgraphsResponse(BaseModel):
-    """Response for GET /datasets/{id}/subgraphs."""
-
-    dataset_id: str
-    mode: str
-    subgraphs: list[SubgraphHit]
-    count: int
-
-
 class SearchModeRequest(BaseModel):
-    """Body for POST /datasets/{id}/search/mode."""
+    """Body for POST /datasets/{id}/search (unified search with mode selector)."""
 
     vector: list[float] = Field(..., description="Query vector.")
-    mode: str = Field(
+    mode: Literal["taumode", "hybrid", "energy", "linear_sorted"] = Field(
         "taumode", description="Search mode: taumode | hybrid | energy | linear_sorted"
     )
     tau: float = Field(1.0, description="Tau param for taumode.")

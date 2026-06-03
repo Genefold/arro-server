@@ -152,48 +152,6 @@ def client_no_index(tmp_zarr_root: Path, tmp_index_store: Path) -> TestClient:
 # ===========================================================================
 
 
-class TestMotives:
-    def test_motives_eigen(self, client: TestClient) -> None:
-        r = client.get(f"/api/datasets/{DATASET_ID}/motives?mode=eigen")
-        assert r.status_code == 200
-        body = r.json()
-        assert body["mode"] == "eigen"
-        assert isinstance(body["motives"], list)
-        assert body["count"] == len(body["motives"])
-        assert all("index" in m and "score" in m for m in body["motives"])
-
-    def test_motives_energy(self, client: TestClient) -> None:
-        r = client.get(f"/api/datasets/{DATASET_ID}/motives?mode=energy")
-        assert r.status_code == 200
-        assert r.json()["mode"] == "energy"
-
-    def test_motives_invalid_mode(self, client: TestClient) -> None:
-        r = client.get(f"/api/datasets/{DATASET_ID}/motives?mode=invalid")
-        assert r.status_code == 422
-
-    def test_motives_missing_index(self, client_no_index: TestClient) -> None:
-        r = client_no_index.get(f"/api/datasets/{DATASET_ID}/motives?mode=eigen")
-        assert r.status_code in (404, 500)
-
-
-class TestSubgraphs:
-    def test_subgraphs_motives(self, client: TestClient) -> None:
-        r = client.get(f"/api/datasets/{DATASET_ID}/subgraphs?mode=motives")
-        assert r.status_code == 200
-        body = r.json()
-        assert body["mode"] == "motives"
-        assert isinstance(body["subgraphs"], list)
-
-    def test_subgraphs_centroids(self, client: TestClient) -> None:
-        r = client.get(f"/api/datasets/{DATASET_ID}/subgraphs?mode=centroids")
-        assert r.status_code == 200
-        assert r.json()["mode"] == "centroids"
-
-    def test_subgraphs_missing_index(self, client_no_index: TestClient) -> None:
-        r = client_no_index.get(f"/api/datasets/{DATASET_ID}/subgraphs?mode=motives")
-        assert r.status_code in (404, 500)
-
-
 class TestGraphExport:
     def test_graph_csr(self, client: TestClient) -> None:
         r = client.get(f"/api/datasets/{DATASET_ID}/graph?fmt=csr")
@@ -263,7 +221,7 @@ class TestSearchMode:
     def test_search_mode_taumode(self, client: TestClient) -> None:
         vec = RNG.standard_normal(N_FEATURES).tolist()
         r = client.post(
-            f"/api/datasets/{DATASET_ID}/search/mode",
+            f"/api/datasets/{DATASET_ID}/search",
             json={"vector": vec, "mode": "taumode", "tau": 1.0},
         )
         assert r.status_code == 200
@@ -272,7 +230,7 @@ class TestSearchMode:
     def test_search_mode_hybrid(self, client: TestClient) -> None:
         vec = RNG.standard_normal(N_FEATURES).tolist()
         r = client.post(
-            f"/api/datasets/{DATASET_ID}/search/mode",
+            f"/api/datasets/{DATASET_ID}/search",
             json={"vector": vec, "mode": "hybrid", "alpha": 0.6},
         )
         assert r.status_code == 200
@@ -281,7 +239,7 @@ class TestSearchMode:
     def test_search_mode_energy(self, client: TestClient) -> None:
         vec = RNG.standard_normal(N_FEATURES).tolist()
         r = client.post(
-            f"/api/datasets/{DATASET_ID}/search/mode",
+            f"/api/datasets/{DATASET_ID}/search",
             json={"vector": vec, "mode": "energy", "k": 5},
         )
         assert r.status_code == 200
@@ -289,7 +247,7 @@ class TestSearchMode:
     def test_search_mode_linear_sorted(self, client: TestClient) -> None:
         vec = RNG.standard_normal(N_FEATURES).tolist()
         r = client.post(
-            f"/api/datasets/{DATASET_ID}/search/mode",
+            f"/api/datasets/{DATASET_ID}/search",
             json={"vector": vec, "mode": "linear_sorted", "k": 5},
         )
         assert r.status_code == 200
@@ -297,7 +255,7 @@ class TestSearchMode:
     def test_search_mode_invalid(self, client: TestClient) -> None:
         vec = RNG.standard_normal(N_FEATURES).tolist()
         r = client.post(
-            f"/api/datasets/{DATASET_ID}/search/mode",
+            f"/api/datasets/{DATASET_ID}/search",
             json={"vector": vec, "mode": "cosine"},
         )
         assert r.status_code == 422
@@ -305,7 +263,7 @@ class TestSearchMode:
     def test_search_mode_missing_index(self, client_no_index: TestClient) -> None:
         vec = RNG.standard_normal(N_FEATURES).tolist()
         r = client_no_index.post(
-            f"/api/datasets/{DATASET_ID}/search/mode",
+            f"/api/datasets/{DATASET_ID}/search",
             json={"vector": vec, "mode": "taumode", "tau": 1.0},
         )
         assert r.status_code in (404, 500)

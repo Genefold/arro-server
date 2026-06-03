@@ -131,6 +131,9 @@ class ArrowSpaceAdapter(ABC):
     def search(self, dataset_id: str, query: dict[str, Any]) -> dict[str, Any]: ...
 
     @abstractmethod
+    def search_batch(self, dataset_id: str, query: dict[str, Any]) -> dict[str, Any]: ...
+
+    @abstractmethod
     def sidecar_manifold(self, dataset_path: Path) -> dict[str, Any]: ...
 
     @abstractmethod
@@ -146,12 +149,6 @@ class ArrowSpaceAdapter(ABC):
 
     @abstractmethod
     def spectral_metrics(self, dataset_id: str) -> dict[str, Any]: ...
-
-    @abstractmethod
-    def motives(self, dataset_id: str, mode: str) -> dict[str, Any]: ...
-
-    @abstractmethod
-    def subgraphs(self, dataset_id: str, mode: str) -> dict[str, Any]: ...
 
     @abstractmethod
     def search_with_mode(self, dataset_id: str, query: dict[str, Any]) -> dict[str, Any]: ...
@@ -255,11 +252,17 @@ class _SidecarAdapter(ArrowSpaceAdapter):
     def spectral_metrics(self, dataset_id: str) -> dict[str, Any]:
         raise OptionalDependencyMissing("arrowspace", "spectral_metrics")
 
-    def motives(self, dataset_id: str, mode: str) -> dict[str, Any]:
-        raise OptionalDependencyMissing("arrowspace", "motives")
+    def spot_motives_eigen(self, dataset_id: str) -> dict[str, Any]:
+        raise OptionalDependencyMissing("arrowspace", "spot_motives_eigen")
 
-    def subgraphs(self, dataset_id: str, mode: str) -> dict[str, Any]:
-        raise OptionalDependencyMissing("arrowspace", "subgraphs")
+    def spot_motives_energy(self, dataset_id: str) -> dict[str, Any]:
+        raise OptionalDependencyMissing("arrowspace", "spot_motives_energy")
+
+    def spot_subg_centroids(self, dataset_id: str) -> dict[str, Any]:
+        raise OptionalDependencyMissing("arrowspace", "spot_subg_centroids")
+
+    def spot_subg_motives(self, dataset_id: str) -> dict[str, Any]:
+        raise OptionalDependencyMissing("arrowspace", "spot_subg_motives")
 
     def search_with_mode(self, dataset_id: str, query: dict[str, Any]) -> dict[str, Any]:
         raise OptionalDependencyMissing("arrowspace", "search_with_mode")
@@ -331,11 +334,17 @@ class _UnavailableAdapter(ArrowSpaceAdapter):
     def spectral_metrics(self, dataset_id):
         raise OptionalDependencyMissing("arrowspace", "spectral_metrics")
 
-    def motives(self, dataset_id, mode):
-        raise OptionalDependencyMissing("arrowspace", "motives")
+    def spot_motives_eigen(self, dataset_id):
+        raise OptionalDependencyMissing("arrowspace", "spot_motives_eigen")
 
-    def subgraphs(self, dataset_id, mode):
-        raise OptionalDependencyMissing("arrowspace", "subgraphs")
+    def spot_motives_energy(self, dataset_id):
+        raise OptionalDependencyMissing("arrowspace", "spot_motives_energy")
+
+    def spot_subg_centroids(self, dataset_id):
+        raise OptionalDependencyMissing("arrowspace", "spot_subg_centroids")
+
+    def spot_subg_motives(self, dataset_id):
+        raise OptionalDependencyMissing("arrowspace", "spot_subg_motives")
 
     def search_with_mode(self, dataset_id, query):
         raise OptionalDependencyMissing("arrowspace", "search_with_mode")
@@ -922,38 +931,6 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
             "lambda_percentiles": percentiles,
             "spectral_energy_total": spectral_energy_total,
             "spectral_energy_norm": spectral_energy_norm,
-        }
-
-    def motives(self, dataset_id: str, mode: str) -> dict[str, Any]:
-        entry = self._get_entry(dataset_id)
-        if mode == "eigen":
-            hits = entry.aspace.spot_motives_eigen()
-        elif mode == "energy":
-            hits = entry.aspace.spot_motives_energy()
-        else:
-            raise ValueError(f"mode must be 'eigen' or 'energy', got '{mode}'")
-        results = [{"index": int(i), "score": float(s)} for i, s in hits]
-        return {
-            "dataset_id": dataset_id,
-            "mode": mode,
-            "motives": results,
-            "count": len(results),
-        }
-
-    def subgraphs(self, dataset_id: str, mode: str) -> dict[str, Any]:
-        entry = self._get_entry(dataset_id)
-        if mode == "motives":
-            hits = entry.aspace.spot_subg_motives()
-        elif mode == "centroids":
-            hits = entry.aspace.spot_subg_centroids()
-        else:
-            raise ValueError(f"mode must be 'motives' or 'centroids', got '{mode}'")
-        results = [{"index": int(i), "score": float(s)} for i, s in hits]
-        return {
-            "dataset_id": dataset_id,
-            "mode": mode,
-            "subgraphs": results,
-            "count": len(results),
         }
 
     def search_with_mode(self, dataset_id: str, query: dict[str, Any]) -> dict[str, Any]:

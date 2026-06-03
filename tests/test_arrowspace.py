@@ -894,12 +894,12 @@ class TestSidecarFallback:
         r = sidecar_client.get(f"/api/datasets/{DATASET_ID}/lambdas")
         assert r.status_code == 503
 
-    def test_search_503_without_package(self, sidecar_client: TestClient):
+    def test_search_501_without_package(self, sidecar_client: TestClient):
         r = sidecar_client.post(
             f"/api/datasets/{DATASET_ID}/search",
             json={"vector": VECTOR},
         )
-        assert r.status_code == 503
+        assert r.status_code == 501
 
     def test_search_energy_503_without_package(self, sidecar_client: TestClient):
         r = sidecar_client.post(
@@ -908,12 +908,12 @@ class TestSidecarFallback:
         )
         assert r.status_code == 503
 
-    def test_search_batch_503_without_package(self, sidecar_client: TestClient):
+    def test_search_batch_501_without_package(self, sidecar_client: TestClient):
         r = sidecar_client.post(
             f"/api/datasets/{DATASET_ID}/search/batch",
             json={"vectors": [VECTOR]},
         )
-        assert r.status_code == 503
+        assert r.status_code == 501
 
     def test_sidecar_manifold_still_works(self, sidecar_client: TestClient):
         r = sidecar_client.get(f"/api/datasets/{DATASET_ID}/manifold")

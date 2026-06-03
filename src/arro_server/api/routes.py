@@ -4,7 +4,7 @@ All routes are mounted under the /api prefix.
 Dataset IDs use '--' as the root/path separator (e.g. 'main--matrix').
 
 Endpoint map
-------------
+-----------
 GET  /api/health
 GET  /api/datasets
 GET  /api/datasets/{id}/metadata
@@ -19,7 +19,7 @@ GET  /api/datasets/{id}/lambdas              -- eigenvalue distribution
 GET  /api/datasets/{id}/graph_laplacian      -- GL metadata
 GET  /api/datasets/{id}/items                -- all items from index
 GET  /api/datasets/{id}/items/{n}            -- single item
-POST /api/datasets/{id}/search               -- spectral vector search
+POST /api/datasets/{id}/search               -- unified spectral vector search with mode selector
 POST /api/datasets/{id}/search/energy        -- energy vector search
 POST /api/datasets/{id}/search/hybrid        -- hybrid vector search
 POST /api/datasets/{id}/search/linear        -- linear sorted search
@@ -28,11 +28,8 @@ GET  /api/datasets/{id}/spot/motives/eigen
 GET  /api/datasets/{id}/spot/motives/energy
 GET  /api/datasets/{id}/spot/subgraphs/centroids
 GET  /api/datasets/{id}/spot/subgraphs/motives
-GET  /api/datasets/{id}/motives?mode=eigen|energy          -- motif detection
-GET  /api/datasets/{id}/subgraphs?mode=motives|centroids   -- subgraph extraction
 GET  /api/datasets/{id}/graph?fmt=csr|dense                -- Laplacian matrix export
 GET  /api/datasets/{id}/spectral_metrics                   -- full spectral analytics
-POST /api/datasets/{id}/search/mode                        -- unified search with mode selector
 """
 
 from __future__ import annotations
@@ -57,7 +54,6 @@ from .schemas import (
     SearchHybridRequest,
     SearchLinearRequest,
     SearchModeRequest,
-    SearchRequest,
 )
 from .serializers import array_to_payload
 
@@ -357,16 +353,6 @@ def dataset_get_item(
     return {"id": dataset_id, "backend": adapter.backend, **data}
 
 
-@router.post("/datasets/{dataset_id:path}/search")
-def dataset_search(
-    dataset_id: str,
-    body: SearchRequest,
-    adapter: ArrowSpaceAdapter = Depends(_arrowspace),
-) -> dict[str, Any]:
-    data = adapter.search(dataset_id, body.model_dump())
-    return {"id": dataset_id, "arrowspace_available": adapter.available, **data}
-
-
 @router.post("/datasets/{dataset_id:path}/search/energy")
 def dataset_search_energy(
     dataset_id: str,
@@ -403,8 +389,11 @@ def dataset_search_batch(
     body: SearchBatchRequest,
     adapter: ArrowSpaceAdapter = Depends(_arrowspace),
 ) -> dict[str, Any]:
-    data = adapter.search_batch(dataset_id, body.model_dump())
-    return {"id": dataset_id, **data}
+    try:
+        data = adapter.search_batch(dataset_id, body.model_dump())
+        return {"id": dataset_id, **data}
+    except OptionalDependencyMissing as exc:
+        raise HTTPException(status_code=501, detail=str(exc)) from exc
 
 
 @router.get("/datasets/{dataset_id:path}/spot/motives/eigen")
@@ -412,13 +401,8 @@ def dataset_spot_motives_eigen(
     dataset_id: str,
     adapter: ArrowSpaceAdapter = Depends(_arrowspace),
 ) -> dict[str, Any]:
-    data = adapter.motives(dataset_id, "eigen")
-    return {
-        "id": dataset_id,
-        "backend": adapter.backend,
-        "method": "spot_motives_eigen",
-        "results": data["motives"],
-    }
+    data = adapter.spot_motives_eigen(dataset_id)
+    return {"id": dataset_id, "backend": adapter.backend, **data}
 
 
 @router.get("/datasets/{dataset_id:path}/spot/motives/energy")
@@ -426,13 +410,8 @@ def dataset_spot_motives_energy(
     dataset_id: str,
     adapter: ArrowSpaceAdapter = Depends(_arrowspace),
 ) -> dict[str, Any]:
-    data = adapter.motives(dataset_id, "energy")
-    return {
-        "id": dataset_id,
-        "backend": adapter.backend,
-        "method": "spot_motives_energy",
-        "results": data["motives"],
-    }
+    data = adapter.spot_motives_energy(dataset_id)
+    return {"id": dataset_id, "backend": adapter.backend, **data}
 
 
 @router.get("/datasets/{dataset_id:path}/spot/subgraphs/centroids")
@@ -440,13 +419,8 @@ def dataset_spot_subg_centroids(
     dataset_id: str,
     adapter: ArrowSpaceAdapter = Depends(_arrowspace),
 ) -> dict[str, Any]:
-    data = adapter.subgraphs(dataset_id, "centroids")
-    return {
-        "id": dataset_id,
-        "backend": adapter.backend,
-        "method": "spot_subg_centroids",
-        "results": data["subgraphs"],
-    }
+    data = adapter.spot_subg_centroids(dataset_id)
+    return {"id": dataset_id, "backend": adapter.backend, **data}
 
 
 @router.get("/datasets/{dataset_id:path}/spot/subgraphs/motives")
@@ -454,50 +428,13 @@ def dataset_spot_subg_motives(
     dataset_id: str,
     adapter: ArrowSpaceAdapter = Depends(_arrowspace),
 ) -> dict[str, Any]:
-    data = adapter.subgraphs(dataset_id, "motives")
-    return {
-        "id": dataset_id,
-        "backend": adapter.backend,
-        "method": "spot_subg_motives",
-        "results": data["subgraphs"],
-    }
+    data = adapter.spot_subg_motives(dataset_id)
+    return {"id": dataset_id, "backend": adapter.backend, **data}
 
 
 # ---------------------------------------------------------------------------
 # Phase 3 — Analytics endpoints
 # ---------------------------------------------------------------------------
-
-
-@router.get("/datasets/{dataset_id:path}/motives")
-def dataset_motives(
-    dataset_id: str,
-    mode: str = Query("eigen", description="'eigen' | 'energy'"),
-    adapter: ArrowSpaceAdapter = Depends(_arrowspace),
-) -> dict[str, Any]:
-    if mode not in ("eigen", "energy"):
-        raise HTTPException(status_code=422, detail="mode must be 'eigen' or 'energy'")
-    try:
-        return adapter.motives(dataset_id, mode)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    except OptionalDependencyMissing as exc:
-        raise HTTPException(status_code=501, detail=str(exc)) from exc
-
-
-@router.get("/datasets/{dataset_id:path}/subgraphs")
-def dataset_subgraphs(
-    dataset_id: str,
-    mode: str = Query("motives", description="'motives' | 'centroids'"),
-    adapter: ArrowSpaceAdapter = Depends(_arrowspace),
-) -> dict[str, Any]:
-    if mode not in ("motives", "centroids"):
-        raise HTTPException(status_code=422, detail="mode must be 'motives' or 'centroids'")
-    try:
-        return adapter.subgraphs(dataset_id, mode)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    except OptionalDependencyMissing as exc:
-        raise HTTPException(status_code=501, detail=str(exc)) from exc
 
 
 @router.get("/datasets/{dataset_id:path}/graph")
@@ -540,8 +477,8 @@ def dataset_spectral_metrics(
         raise HTTPException(status_code=501, detail=str(exc)) from exc
 
 
-@router.post("/datasets/{dataset_id:path}/search/mode")
-def search_with_mode(
+@router.post("/datasets/{dataset_id:path}/search")
+def dataset_search(
     dataset_id: str,
     body: SearchModeRequest,
     adapter: ArrowSpaceAdapter = Depends(_arrowspace),
@@ -554,7 +491,8 @@ def search_with_mode(
         "k": body.k,
     }
     try:
-        return adapter.search_with_mode(dataset_id, q_dict)
+        result = adapter.search_with_mode(dataset_id, q_dict)
+        return {"id": dataset_id, "arrowspace_available": adapter.available, **result}
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except OptionalDependencyMissing:
