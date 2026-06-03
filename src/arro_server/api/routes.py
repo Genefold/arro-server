@@ -51,17 +51,13 @@ from ..slicing import enforce_window_budget, parse_slice, trailing_product
 from ..storage import StorageRegistry, get_registry
 from ..storage.zarr_fs import zarr_available
 from .schemas import (
-    GraphExportResponse,
     IndexBuildRequest,
-    MotivesResponse,
     SearchBatchRequest,
     SearchEnergyRequest,
     SearchHybridRequest,
     SearchLinearRequest,
     SearchModeRequest,
     SearchRequest,
-    SpectralMetricsResponse,
-    SubgraphsResponse,
 )
 from .serializers import array_to_payload
 
@@ -552,7 +548,9 @@ def search_with_mode(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except OptionalDependencyMissing:
-        raise HTTPException(status_code=501, detail="search_with_mode requires arrowspace") from None
+        raise HTTPException(
+            status_code=501, detail="search_with_mode requires arrowspace"
+        ) from None
 
 
 # ---------------------------------------------------------------------------

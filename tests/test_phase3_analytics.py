@@ -197,9 +197,15 @@ class TestSpectralMetrics:
         assert r.status_code == 200
         body = r.json()
         required_keys = [
-            "fiedler_value", "spectral_gap", "spectral_energy_total",
-            "spectral_energy_norm", "lambda_percentiles", "lambdas_sorted",
-            "algebraic_connectivity", "lambda_min", "lambda_max",
+            "fiedler_value",
+            "spectral_gap",
+            "spectral_energy_total",
+            "spectral_energy_norm",
+            "lambda_percentiles",
+            "lambdas_sorted",
+            "algebraic_connectivity",
+            "lambda_min",
+            "lambda_max",
         ]
         for key in required_keys:
             assert key in body, f"Missing key: {key}"

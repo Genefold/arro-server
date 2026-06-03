@@ -166,7 +166,9 @@ class SearchModeRequest(BaseModel):
     """Body for POST /datasets/{id}/search/mode."""
 
     vector: list[float] = Field(..., description="Query vector.")
-    mode: str = Field("taumode", description="Search mode: taumode | hybrid | energy | linear_sorted")
+    mode: str = Field(
+        "taumode", description="Search mode: taumode | hybrid | energy | linear_sorted"
+    )
     tau: float = Field(1.0, description="Tau param for taumode.")
     alpha: float = Field(0.5, ge=0.0, le=1.0, description="Blend for hybrid mode.")
     k: int = Field(10, ge=1, description="Top-k for energy and linear_sorted.")

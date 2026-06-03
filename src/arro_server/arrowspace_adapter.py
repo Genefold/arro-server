@@ -922,8 +922,8 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
         spectral_gap = float(nonzero[1] - nonzero[0]) if len(nonzero) >= 2 else 0.0
 
         lam_max = float(lam_arr.max()) if n > 0 else 1.0
-        spectral_energy_total = float(np.sum(lam_arr ** 2) / n) if n > 0 else 0.0
-        spectral_energy_norm = (spectral_energy_total / (lam_max ** 2)) if lam_max > eps else 0.0
+        spectral_energy_total = float(np.sum(lam_arr**2) / n) if n > 0 else 0.0
+        spectral_energy_norm = (spectral_energy_total / (lam_max**2)) if lam_max > eps else 0.0
 
         percentiles = {}
         if n > 0:
@@ -989,9 +989,7 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
             "linear_sorted": self.search_linear_sorted,
         }
         if mode not in dispatch:
-            raise ValueError(
-                f"mode must be one of {list(dispatch.keys())}, got '{mode}'"
-            )
+            raise ValueError(f"mode must be one of {list(dispatch.keys())}, got '{mode}'")
         result = dispatch[mode](dataset_id, query)
         result["mode"] = mode
         return result
