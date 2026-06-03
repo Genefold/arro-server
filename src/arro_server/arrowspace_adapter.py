@@ -141,6 +141,21 @@ class ArrowSpaceAdapter(ABC):
         self, dataset_path: Path, q: str, *, limit: int = 20
     ) -> list[dict[str, Any]]: ...
 
+    @abstractmethod
+    def graph_export(self, dataset_id: str, fmt: str) -> dict[str, Any]: ...
+
+    @abstractmethod
+    def spectral_metrics(self, dataset_id: str) -> dict[str, Any]: ...
+
+    @abstractmethod
+    def motives(self, dataset_id: str, mode: str) -> dict[str, Any]: ...
+
+    @abstractmethod
+    def subgraphs(self, dataset_id: str, mode: str) -> dict[str, Any]: ...
+
+    @abstractmethod
+    def search_with_mode(self, dataset_id: str, query: dict[str, Any]) -> dict[str, Any]: ...
+
 
 # ---------------------------------------------------------------------------
 # Sidecar JSON adapter
@@ -246,6 +261,21 @@ class _SidecarAdapter(ArrowSpaceAdapter):
     def spot_subg_motives(self, dataset_id: str) -> dict[str, Any]:
         raise OptionalDependencyMissing("arrowspace", "spot_subg_motives")
 
+    def graph_export(self, dataset_id: str, fmt: str) -> dict[str, Any]:
+        raise OptionalDependencyMissing("arrowspace", "graph_export")
+
+    def spectral_metrics(self, dataset_id: str) -> dict[str, Any]:
+        raise OptionalDependencyMissing("arrowspace", "spectral_metrics")
+
+    def motives(self, dataset_id: str, mode: str) -> dict[str, Any]:
+        raise OptionalDependencyMissing("arrowspace", "motives")
+
+    def subgraphs(self, dataset_id: str, mode: str) -> dict[str, Any]:
+        raise OptionalDependencyMissing("arrowspace", "subgraphs")
+
+    def search_with_mode(self, dataset_id: str, query: dict[str, Any]) -> dict[str, Any]:
+        raise OptionalDependencyMissing("arrowspace", "search_with_mode")
+
 
 # ---------------------------------------------------------------------------
 # No-op adapter
@@ -318,6 +348,21 @@ class _UnavailableAdapter(ArrowSpaceAdapter):
 
     def spot_subg_motives(self, dataset_id):
         raise OptionalDependencyMissing("arrowspace", "spot_subg_motives")
+
+    def graph_export(self, dataset_id, fmt):
+        raise OptionalDependencyMissing("arrowspace", "graph_export")
+
+    def spectral_metrics(self, dataset_id):
+        raise OptionalDependencyMissing("arrowspace", "spectral_metrics")
+
+    def motives(self, dataset_id, mode):
+        raise OptionalDependencyMissing("arrowspace", "motives")
+
+    def subgraphs(self, dataset_id, mode):
+        raise OptionalDependencyMissing("arrowspace", "subgraphs")
+
+    def search_with_mode(self, dataset_id, query):
+        raise OptionalDependencyMissing("arrowspace", "search_with_mode")
 
 
 # ---------------------------------------------------------------------------
@@ -837,6 +882,119 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
             "method": "spot_subg_motives",
             "results": self._spot_hits(entry.aspace.spot_subg_motives()),
         }
+
+    def graph_export(self, dataset_id: str, fmt: str) -> dict[str, Any]:
+        entry = self._get_entry(dataset_id)
+        if fmt == "csr":
+            csr_data, csr_indices, csr_indptr, csr_shape = entry.gl.to_csr()
+            return {
+                "dataset_id": dataset_id,
+                "fmt": "csr",
+                "data": [float(v) for v in csr_data],
+                "indices": [int(v) for v in csr_indices],
+                "indptr": [int(v) for v in csr_indptr],
+                "shape": list(csr_shape),
+            }
+        elif fmt == "dense":
+            dense = entry.gl.to_dense()
+            return {
+                "dataset_id": dataset_id,
+                "fmt": "dense",
+                "matrix": dense.tolist(),
+                "nnodes": int(dense.shape[0]),
+                "shape": list(dense.shape),
+            }
+        else:
+            raise ValueError(f"fmt must be 'csr' or 'dense', got '{fmt}'")
+
+    def spectral_metrics(self, dataset_id: str) -> dict[str, Any]:
+        entry = self._get_entry(dataset_id)
+        lam_arr = np.array(list(entry.aspace.lambdas()), dtype=np.float64)
+        lam_sorted_raw = entry.aspace.lambdas_sorted()
+        lam_sorted = [[float(v), int(i)] for v, i in lam_sorted_raw]
+
+        n = len(lam_arr)
+        lam_sorted_vals = sorted(lam_arr)
+
+        eps = 1e-10
+        nonzero = [v for v in lam_sorted_vals if v > eps]
+        fiedler = float(nonzero[0]) if nonzero else 0.0
+        spectral_gap = float(nonzero[1] - nonzero[0]) if len(nonzero) >= 2 else 0.0
+
+        lam_max = float(lam_arr.max()) if n > 0 else 1.0
+        spectral_energy_total = float(np.sum(lam_arr ** 2) / n) if n > 0 else 0.0
+        spectral_energy_norm = (spectral_energy_total / (lam_max ** 2)) if lam_max > eps else 0.0
+
+        percentiles = {}
+        if n > 0:
+            for p in [10, 25, 50, 75, 90]:
+                percentiles[f"p{p}"] = float(np.percentile(lam_arr, p))
+
+        return {
+            "dataset_id": dataset_id,
+            "nitems": entry.nitems,
+            "nclusters": entry.nclusters,
+            "lambda_min": float(lam_arr.min()) if n > 0 else 0.0,
+            "lambda_max": lam_max,
+            "lambda_mean": float(lam_arr.mean()) if n > 0 else 0.0,
+            "lambda_std": float(lam_arr.std()) if n > 0 else 0.0,
+            "lambda_sum": float(lam_arr.sum()) if n > 0 else 0.0,
+            "spectral_gap": spectral_gap,
+            "fiedler_value": fiedler,
+            "algebraic_connectivity": fiedler,
+            "lambdas_sorted": lam_sorted,
+            "lambda_percentiles": percentiles,
+            "spectral_energy_total": spectral_energy_total,
+            "spectral_energy_norm": spectral_energy_norm,
+        }
+
+    def motives(self, dataset_id: str, mode: str) -> dict[str, Any]:
+        entry = self._get_entry(dataset_id)
+        if mode == "eigen":
+            hits = entry.aspace.spot_motives_eigen()
+        elif mode == "energy":
+            hits = entry.aspace.spot_motives_energy()
+        else:
+            raise ValueError(f"mode must be 'eigen' or 'energy', got '{mode}'")
+        results = [{"index": int(i), "score": float(s)} for i, s in hits]
+        return {
+            "dataset_id": dataset_id,
+            "mode": mode,
+            "motives": results,
+            "count": len(results),
+        }
+
+    def subgraphs(self, dataset_id: str, mode: str) -> dict[str, Any]:
+        entry = self._get_entry(dataset_id)
+        if mode == "motives":
+            hits = entry.aspace.spot_subg_motives()
+        elif mode == "centroids":
+            hits = entry.aspace.spot_subg_centroids()
+        else:
+            raise ValueError(f"mode must be 'motives' or 'centroids', got '{mode}'")
+        results = [{"index": int(i), "score": float(s)} for i, s in hits]
+        return {
+            "dataset_id": dataset_id,
+            "mode": mode,
+            "subgraphs": results,
+            "count": len(results),
+        }
+
+    def search_with_mode(self, dataset_id: str, query: dict[str, Any]) -> dict[str, Any]:
+        mode = query.get("mode", "taumode")
+        dispatch = {
+            "taumode": self.search,
+            "hybrid": self.search_hybrid,
+            "energy": self.search_energy,
+            "linear_sorted": self.search_linear_sorted,
+        }
+        if mode not in dispatch:
+            raise ValueError(
+                f"mode must be one of {list(dispatch.keys())}, got '{mode}'"
+            )
+        result = dispatch[mode](dataset_id, query)
+        result["mode"] = mode
+        return result
 
     def manifold_data(self, dataset_id: str) -> dict[str, Any]:
         entry = self._get_entry(dataset_id)

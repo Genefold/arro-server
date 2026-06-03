@@ -94,3 +94,79 @@ class IndexBuildRequest(BaseModel):
         if values.keys() <= _GRAPH_PARAM_KEYS:
             return {"graph_params": values}
         return values
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 — Analytics schemas
+# ---------------------------------------------------------------------------
+
+
+class GraphExportResponse(BaseModel):
+    """Response for GET /datasets/{id}/graph."""
+
+    dataset_id: str
+    fmt: str  # "csr" | "dense"
+    data: list[float] | None = None
+    indices: list[int] | None = None
+    indptr: list[int] | None = None
+    shape: list[int] | None = None
+    matrix: list[list[float]] | None = None
+    nnodes: int | None = None
+
+
+class SpectralMetricsResponse(BaseModel):
+    """Response for GET /datasets/{id}/spectral_metrics."""
+
+    dataset_id: str
+    nitems: int
+    nclusters: int
+    lambda_min: float
+    lambda_max: float
+    lambda_mean: float
+    lambda_std: float
+    lambda_sum: float
+    spectral_gap: float
+    fiedler_value: float
+    algebraic_connectivity: float
+    lambdas_sorted: list[list[float]]
+    lambda_percentiles: dict[str, float]
+    spectral_energy_total: float
+    spectral_energy_norm: float
+
+
+class MotiveHit(BaseModel):
+    index: int
+    score: float
+
+
+class MotivesResponse(BaseModel):
+    """Response for GET /datasets/{id}/motives."""
+
+    dataset_id: str
+    mode: str
+    motives: list[MotiveHit]
+    count: int
+
+
+class SubgraphHit(BaseModel):
+    index: int
+    score: float
+
+
+class SubgraphsResponse(BaseModel):
+    """Response for GET /datasets/{id}/subgraphs."""
+
+    dataset_id: str
+    mode: str
+    subgraphs: list[SubgraphHit]
+    count: int
+
+
+class SearchModeRequest(BaseModel):
+    """Body for POST /datasets/{id}/search/mode."""
+
+    vector: list[float] = Field(..., description="Query vector.")
+    mode: str = Field("taumode", description="Search mode: taumode | hybrid | energy | linear_sorted")
+    tau: float = Field(1.0, description="Tau param for taumode.")
+    alpha: float = Field(0.5, ge=0.0, le=1.0, description="Blend for hybrid mode.")
+    k: int = Field(10, ge=1, description="Top-k for energy and linear_sorted.")
