@@ -55,6 +55,7 @@ def _make_mock_aspace() -> MagicMock:
     m.search_batch.return_value = [
         [(i, float(i * 0.1)) for i in range(5)],
         [(i, float(i * 0.15)) for i in range(5)],
+        [(i, float(i * 0.2)) for i in range(5)],
     ]
     m.search_energy.return_value = [(i, float(i * 0.1)) for i in range(5)]
     m.search_hybrid.return_value = [(i, float(i * 0.1)) for i in range(5)]
@@ -118,6 +119,34 @@ def client(tmp_zarr_root: Path, tmp_index_store: Path) -> TestClient:
     reset_adapter_cache()
 
 
+@pytest.fixture
+def client_no_index(tmp_zarr_root: Path, tmp_index_store: Path) -> TestClient:
+    """Client backed by an adapter that has no index built for any dataset."""
+    mock_mod = MagicMock()
+    adapter = _ArrowSpaceAdapter(mock_mod, cache_size=4)
+    # Intentionally do NOT inject any _IndexEntry into the cache.
+
+    os.environ["ARRO_SERVER_DATA_ROOTS"] = f"main={tmp_zarr_root}"
+    os.environ["ARRO_SERVER_SERVE_FRONTEND"] = "false"
+    os.environ["ARRO_SERVER_INDEX_STORE"] = str(tmp_index_store)
+    reset_settings_cache()
+    reset_registry_cache()
+    reset_adapter_cache()
+
+    app = create_app()
+    app.dependency_overrides[_arrowspace] = lambda: adapter
+
+    with TestClient(app) as c:
+        yield c
+
+    os.environ.pop("ARRO_SERVER_DATA_ROOTS", None)
+    os.environ.pop("ARRO_SERVER_SERVE_FRONTEND", None)
+    os.environ.pop("ARRO_SERVER_INDEX_STORE", None)
+    reset_settings_cache()
+    reset_registry_cache()
+    reset_adapter_cache()
+
+
 # ===========================================================================
 # Tests
 # ===========================================================================
@@ -142,6 +171,10 @@ class TestMotives:
         r = client.get(f"/api/datasets/{DATASET_ID}/motives?mode=invalid")
         assert r.status_code == 422
 
+    def test_motives_missing_index(self, client_no_index: TestClient) -> None:
+        r = client_no_index.get(f"/api/datasets/{DATASET_ID}/motives?mode=eigen")
+        assert r.status_code in (404, 500)
+
 
 class TestSubgraphs:
     def test_subgraphs_motives(self, client: TestClient) -> None:
@@ -155,6 +188,10 @@ class TestSubgraphs:
         r = client.get(f"/api/datasets/{DATASET_ID}/subgraphs?mode=centroids")
         assert r.status_code == 200
         assert r.json()["mode"] == "centroids"
+
+    def test_subgraphs_missing_index(self, client_no_index: TestClient) -> None:
+        r = client_no_index.get(f"/api/datasets/{DATASET_ID}/subgraphs?mode=motives")
+        assert r.status_code in (404, 500)
 
 
 class TestGraphExport:
@@ -179,6 +216,10 @@ class TestGraphExport:
     def test_graph_invalid_fmt(self, client: TestClient) -> None:
         r = client.get(f"/api/datasets/{DATASET_ID}/graph?fmt=xml")
         assert r.status_code == 422
+
+    def test_graph_missing_index(self, client_no_index: TestClient) -> None:
+        r = client_no_index.get(f"/api/datasets/{DATASET_ID}/graph?fmt=csr")
+        assert r.status_code in (404, 500)
 
 
 class TestLambdas:
@@ -212,6 +253,10 @@ class TestSpectralMetrics:
         assert 0.0 <= body["spectral_energy_norm"] <= 1.0 + 1e-9
         assert isinstance(body["lambda_percentiles"], dict)
         assert "p50" in body["lambda_percentiles"]
+
+    def test_spectral_metrics_missing_index(self, client_no_index: TestClient) -> None:
+        r = client_no_index.get(f"/api/datasets/{DATASET_ID}/spectral_metrics")
+        assert r.status_code in (404, 500)
 
 
 class TestSearchMode:
@@ -257,6 +302,14 @@ class TestSearchMode:
         )
         assert r.status_code == 422
 
+    def test_search_mode_missing_index(self, client_no_index: TestClient) -> None:
+        vec = RNG.standard_normal(N_FEATURES).tolist()
+        r = client_no_index.post(
+            f"/api/datasets/{DATASET_ID}/search/mode",
+            json={"vector": vec, "mode": "taumode", "tau": 1.0},
+        )
+        assert r.status_code in (404, 500)
+
 
 class TestSearchBatch:
     def test_search_batch(self, client: TestClient) -> None:
@@ -268,4 +321,4 @@ class TestSearchBatch:
         assert r.status_code == 200
         body = r.json()
         assert "results" in body
-        assert len(body["results"]) == 2
+        assert len(body["results"]) == 3

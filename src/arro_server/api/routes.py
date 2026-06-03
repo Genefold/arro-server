@@ -412,8 +412,13 @@ def dataset_spot_motives_eigen(
     dataset_id: str,
     adapter: ArrowSpaceAdapter = Depends(_arrowspace),
 ) -> dict[str, Any]:
-    data = adapter.spot_motives_eigen(dataset_id)
-    return {"id": dataset_id, "backend": adapter.backend, **data}
+    data = adapter.motives(dataset_id, "eigen")
+    return {
+        "id": dataset_id,
+        "backend": adapter.backend,
+        "method": "spot_motives_eigen",
+        "results": data["motives"],
+    }
 
 
 @router.get("/datasets/{dataset_id:path}/spot/motives/energy")
@@ -421,8 +426,13 @@ def dataset_spot_motives_energy(
     dataset_id: str,
     adapter: ArrowSpaceAdapter = Depends(_arrowspace),
 ) -> dict[str, Any]:
-    data = adapter.spot_motives_energy(dataset_id)
-    return {"id": dataset_id, "backend": adapter.backend, **data}
+    data = adapter.motives(dataset_id, "energy")
+    return {
+        "id": dataset_id,
+        "backend": adapter.backend,
+        "method": "spot_motives_energy",
+        "results": data["motives"],
+    }
 
 
 @router.get("/datasets/{dataset_id:path}/spot/subgraphs/centroids")
@@ -430,8 +440,13 @@ def dataset_spot_subg_centroids(
     dataset_id: str,
     adapter: ArrowSpaceAdapter = Depends(_arrowspace),
 ) -> dict[str, Any]:
-    data = adapter.spot_subg_centroids(dataset_id)
-    return {"id": dataset_id, "backend": adapter.backend, **data}
+    data = adapter.subgraphs(dataset_id, "centroids")
+    return {
+        "id": dataset_id,
+        "backend": adapter.backend,
+        "method": "spot_subg_centroids",
+        "results": data["subgraphs"],
+    }
 
 
 @router.get("/datasets/{dataset_id:path}/spot/subgraphs/motives")
@@ -439,8 +454,13 @@ def dataset_spot_subg_motives(
     dataset_id: str,
     adapter: ArrowSpaceAdapter = Depends(_arrowspace),
 ) -> dict[str, Any]:
-    data = adapter.spot_subg_motives(dataset_id)
-    return {"id": dataset_id, "backend": adapter.backend, **data}
+    data = adapter.subgraphs(dataset_id, "motives")
+    return {
+        "id": dataset_id,
+        "backend": adapter.backend,
+        "method": "spot_subg_motives",
+        "results": data["subgraphs"],
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -452,14 +472,12 @@ def dataset_spot_subg_motives(
 def dataset_motives(
     dataset_id: str,
     mode: str = Query("eigen", description="'eigen' | 'energy'"),
-    reg: StorageRegistry = Depends(_registry),
     adapter: ArrowSpaceAdapter = Depends(_arrowspace),
 ) -> dict[str, Any]:
     if mode not in ("eigen", "energy"):
         raise HTTPException(status_code=422, detail="mode must be 'eigen' or 'energy'")
-    h = reg.open(dataset_id)
     try:
-        return adapter.motives(h.summary.dataset_id, mode)
+        return adapter.motives(dataset_id, mode)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except OptionalDependencyMissing as exc:
@@ -470,14 +488,12 @@ def dataset_motives(
 def dataset_subgraphs(
     dataset_id: str,
     mode: str = Query("motives", description="'motives' | 'centroids'"),
-    reg: StorageRegistry = Depends(_registry),
     adapter: ArrowSpaceAdapter = Depends(_arrowspace),
 ) -> dict[str, Any]:
     if mode not in ("motives", "centroids"):
         raise HTTPException(status_code=422, detail="mode must be 'motives' or 'centroids'")
-    h = reg.open(dataset_id)
     try:
-        return adapter.subgraphs(h.summary.dataset_id, mode)
+        return adapter.subgraphs(dataset_id, mode)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except OptionalDependencyMissing as exc:
@@ -488,15 +504,13 @@ def dataset_subgraphs(
 def dataset_graph(
     dataset_id: str,
     fmt: str = Query("csr", description="'csr' | 'dense'"),
-    reg: StorageRegistry = Depends(_registry),
     adapter: ArrowSpaceAdapter = Depends(_arrowspace),
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
     if fmt not in ("csr", "dense"):
         raise HTTPException(status_code=422, detail="fmt must be 'csr' or 'dense'")
-    h = reg.open(dataset_id)
     try:
-        result = adapter.graph_export(h.summary.dataset_id, fmt)
+        result = adapter.graph_export(dataset_id, fmt)
         if fmt == "dense":
             nnodes = result.get("nnodes", 0)
             if nnodes > settings.max_window:
@@ -518,12 +532,10 @@ def dataset_graph(
 @router.get("/datasets/{dataset_id:path}/spectral_metrics")
 def dataset_spectral_metrics(
     dataset_id: str,
-    reg: StorageRegistry = Depends(_registry),
     adapter: ArrowSpaceAdapter = Depends(_arrowspace),
 ) -> dict[str, Any]:
-    h = reg.open(dataset_id)
     try:
-        return adapter.spectral_metrics(h.summary.dataset_id)
+        return adapter.spectral_metrics(dataset_id)
     except OptionalDependencyMissing as exc:
         raise HTTPException(status_code=501, detail=str(exc)) from exc
 
@@ -532,10 +544,8 @@ def dataset_spectral_metrics(
 def search_with_mode(
     dataset_id: str,
     body: SearchModeRequest,
-    reg: StorageRegistry = Depends(_registry),
     adapter: ArrowSpaceAdapter = Depends(_arrowspace),
 ) -> dict[str, Any]:
-    h = reg.open(dataset_id)
     q_dict = {
         "vector": body.vector,
         "mode": body.mode,
@@ -544,7 +554,7 @@ def search_with_mode(
         "k": body.k,
     }
     try:
-        return adapter.search_with_mode(h.summary.dataset_id, q_dict)
+        return adapter.search_with_mode(dataset_id, q_dict)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except OptionalDependencyMissing:

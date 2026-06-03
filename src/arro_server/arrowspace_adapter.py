@@ -249,18 +249,6 @@ class _SidecarAdapter(ArrowSpaceAdapter):
     def search_linear_sorted(self, dataset_id: str, query: dict[str, Any]) -> dict[str, Any]:
         raise OptionalDependencyMissing("arrowspace", "search_linear_sorted")
 
-    def spot_motives_eigen(self, dataset_id: str) -> dict[str, Any]:
-        raise OptionalDependencyMissing("arrowspace", "spot_motives_eigen")
-
-    def spot_motives_energy(self, dataset_id: str) -> dict[str, Any]:
-        raise OptionalDependencyMissing("arrowspace", "spot_motives_energy")
-
-    def spot_subg_centroids(self, dataset_id: str) -> dict[str, Any]:
-        raise OptionalDependencyMissing("arrowspace", "spot_subg_centroids")
-
-    def spot_subg_motives(self, dataset_id: str) -> dict[str, Any]:
-        raise OptionalDependencyMissing("arrowspace", "spot_subg_motives")
-
     def graph_export(self, dataset_id: str, fmt: str) -> dict[str, Any]:
         raise OptionalDependencyMissing("arrowspace", "graph_export")
 
@@ -336,18 +324,6 @@ class _UnavailableAdapter(ArrowSpaceAdapter):
 
     def search_linear_sorted(self, dataset_id, query):
         raise OptionalDependencyMissing("arrowspace", "search_linear_sorted")
-
-    def spot_motives_eigen(self, dataset_id):
-        raise OptionalDependencyMissing("arrowspace", "spot_motives_eigen")
-
-    def spot_motives_energy(self, dataset_id):
-        raise OptionalDependencyMissing("arrowspace", "spot_motives_energy")
-
-    def spot_subg_centroids(self, dataset_id):
-        raise OptionalDependencyMissing("arrowspace", "spot_subg_centroids")
-
-    def spot_subg_motives(self, dataset_id):
-        raise OptionalDependencyMissing("arrowspace", "spot_subg_motives")
 
     def graph_export(self, dataset_id, fmt):
         raise OptionalDependencyMissing("arrowspace", "graph_export")
