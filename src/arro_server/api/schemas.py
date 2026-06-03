@@ -17,13 +17,6 @@ from pydantic import BaseModel, Field, model_validator
 _GRAPH_PARAM_KEYS = frozenset({"eps", "k", "topk", "p", "sigma"})
 
 
-class SearchRequest(BaseModel):
-    """Body for POST /datasets/{id}/search (spectral taumode search)."""
-
-    vector: list[float] = Field(..., description="Query vector (float64 values).")
-    tau: float = Field(1.0, description="Taumode tau parameter.")
-
-
 class SearchEnergyRequest(BaseModel):
     """Body for POST /datasets/{id}/search/energy.
 
