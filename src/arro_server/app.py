@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import __version__
+from .api import admin_router
 from .api import router as api_router
 from .errors import MetadataUnavailable, OptionalDependencyMissing
 from .settings import Settings, get_settings
@@ -70,6 +71,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_headers=["*"],
     )
     app.include_router(api_router)
+    app.include_router(admin_router)
 
     @app.exception_handler(MetadataUnavailable)
     async def _metadata_unavailable_handler(

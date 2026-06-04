@@ -1,3 +1,3 @@
-from arro_server.api.routes import router
+from arro_server.api.routes import admin_router, router
 
-__all__ = ["router"]
+__all__ = ["admin_router", "router"]
