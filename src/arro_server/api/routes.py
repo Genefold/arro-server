@@ -37,7 +37,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 
 from .. import __version__
 from ..arrowspace_adapter import DEFAULT_GRAPH_PARAMS, ArrowSpaceAdapter
@@ -58,6 +58,7 @@ from .schemas import (
 from .serializers import array_to_payload
 
 router = APIRouter(prefix="/api")
+admin_router = APIRouter(prefix="/api/admin")
 
 
 def _registry() -> StorageRegistry:
@@ -66,6 +67,60 @@ def _registry() -> StorageRegistry:
 
 def _arrowspace() -> ArrowSpaceAdapter:
     return load_arrowspace()
+
+
+# ---------------------------------------------------------------------------
+# Admin — reload / cache invalidation
+# ---------------------------------------------------------------------------
+
+
+def _require_admin_token(
+    authorization: str | None = Header(default=None),
+    settings: Settings = Depends(get_settings),
+) -> None:
+    """Dependency — raises 401 if admin_token is set and header doesn't match."""
+    if settings.admin_token is None:
+        return
+    expected = f"Bearer {settings.admin_token}"
+    if authorization != expected:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or missing Authorization header.",
+        )
+
+
+@admin_router.post("/reload", dependencies=[Depends(_require_admin_token)])
+def admin_reload(
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    """Invalidate all LRU caches and re-scan data_roots.
+
+    Call this after writing new Zarr datasets to a data_root from an
+    external process (e.g. arro-memory on a shared volume).
+    """
+    from ..arrowspace_adapter import load as load_adapter
+    from ..arrowspace_adapter import reset_adapter_cache
+    from ..storage.registry import get_registry, reset_registry_cache
+
+    reset_registry_cache()
+    reset_adapter_cache()
+
+    registry = get_registry()
+    datasets = registry.list_datasets()
+
+    new_adapter = load_adapter()
+    index_store = Path(settings.index_store).expanduser().resolve()
+    try:
+        loaded = new_adapter.reload_from_manifest(index_store)
+    except Exception:
+        loaded = []
+
+    return {
+        "reloaded": True,
+        "datasets_found": len([d for d in datasets if d.kind == "array"]),
+        "data_roots": list(settings.resolved_roots.keys()),
+        "indexed_datasets": loaded,
+    }
 
 
 # ---------------------------------------------------------------------------

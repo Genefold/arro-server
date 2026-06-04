@@ -44,6 +44,9 @@ class Settings(BaseSettings):
     # Maximum number of ArrowSpace indices to keep in memory simultaneously.
     # Oldest entry is evicted when the limit is reached.
     index_cache_size: int = 8
+    # Optional static bearer token protecting /api/admin/* endpoints.
+    # Leave unset (default None) for unauthenticated access (dev/private-network only).
+    admin_token: str | None = None
 
     @field_validator("data_roots", "cors_origins", mode="before")
     @classmethod
