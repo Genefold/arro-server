@@ -81,21 +81,51 @@ def test_reload_is_idempotent(client):
 
 
 def test_reload_reports_new_datasets(client, tmp_zarr_root):
+    """Registry cache is stale after external write; reload makes new dataset visible.
+
+    Sequence:
+      1. Record baseline dataset IDs from GET /api/datasets
+      2. Write a new Zarr array directly to tmp_zarr_root (simulates arro-memory
+         writing to a shared volume)
+      3. Assert GET /api/datasets still returns the OLD list (cache is stale)
+      4. Call POST /api/admin/reload
+      5. Assert GET /api/datasets NOW includes the new dataset
+      6. Assert reload response datasets_found == baseline + 1
+    """
     zarr = pytest.importorskip("zarr")
     import numpy as np
 
-    before_count = client.post("/api/admin/reload").json()["datasets_found"]
+    # 1. Baseline
+    before_ids = {d["id"] for d in client.get("/api/datasets").json()["datasets"]}
+    before_count = len([
+        d for d in client.get("/api/datasets").json()["datasets"]
+        if d["kind"] == "array"
+    ])
 
+    # 2. Write new Zarr to the same root AFTER startup (simulates external write)
     new_path = tmp_zarr_root / "new_embeddings"
     arr = zarr.open(str(new_path), mode="w", shape=(20, 8), chunks=(10, 8), dtype="float64")
     arr[:] = np.random.default_rng(0).standard_normal((20, 8))
 
+    # 3. Verify cache is stale — new dataset NOT yet visible without reload
+    stale_ids = {d["id"] for d in client.get("/api/datasets").json()["datasets"]}
+    assert stale_ids == before_ids, (
+        "Expected registry cache to be stale after external write, "
+        f"but found new ids: {stale_ids - before_ids}"
+    )
+
+    # 4. Reload
     r = client.post("/api/admin/reload")
     assert r.status_code == 200
-    assert r.json()["datasets_found"] == before_count + 1
 
-    ids = {d["id"] for d in client.get("/api/datasets").json()["datasets"]}
-    assert any("new_embeddings" in i for i in ids)
+    # 5. New dataset is now visible
+    after_ids = {d["id"] for d in client.get("/api/datasets").json()["datasets"]}
+    new_ids = after_ids - before_ids
+    assert len(new_ids) == 1, f"Expected exactly 1 new dataset, got: {new_ids}"
+    assert any("new_embeddings" in i for i in new_ids)
+
+    # 6. reload response count is consistent
+    assert r.json()["datasets_found"] == before_count + 1
 
 
 # ---------------------------------------------------------------------------

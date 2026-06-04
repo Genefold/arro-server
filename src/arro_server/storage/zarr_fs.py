@@ -101,11 +101,15 @@ class ZarrFilesystemBackend:
 
     def __init__(self, roots: dict[str, Path]):
         self._roots = roots
+        self._list_cache: list[DatasetSummary] | None = None
 
     # ----- discovery ---------------------------------------------------
 
     def list_datasets(self) -> list[DatasetSummary]:
+        if self._list_cache is not None:
+            return list(self._list_cache)
         if not _ZARR_AVAILABLE:
+            self._list_cache = []
             return []
         out: list[DatasetSummary] = []
         for label, root in self._roots.items():
@@ -113,7 +117,8 @@ class ZarrFilesystemBackend:
                 log.warning("data root %s does not exist: %s", label, root)
                 continue
             out.extend(self._scan_root(label, root))
-        return out
+        self._list_cache = out
+        return list(out)
 
     def _scan_root(self, label: str, root: Path) -> list[DatasetSummary]:
         found: list[DatasetSummary] = []

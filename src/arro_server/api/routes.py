@@ -30,6 +30,7 @@ GET  /api/datasets/{id}/spot/subgraphs/centroids
 GET  /api/datasets/{id}/spot/subgraphs/motives
 GET  /api/datasets/{id}/graph?fmt=csr|dense                -- Laplacian matrix export
 GET  /api/datasets/{id}/spectral_metrics                   -- full spectral analytics
+POST /api/admin/reload                                     -- hot-reload StorageRegistry + ArrowSpaceAdapter cache
 """
 
 from __future__ import annotations
