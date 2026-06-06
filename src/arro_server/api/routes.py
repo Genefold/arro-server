@@ -172,8 +172,7 @@ def upload_init(
         raise HTTPException(
             status_code=404,
             detail=(
-                f"Root '{body.root}' is not configured. "
-                f"Configured roots: {list(roots.keys())}."
+                f"Root '{body.root}' is not configured. Configured roots: {list(roots.keys())}."
             ),
         )
 
