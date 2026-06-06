@@ -63,6 +63,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import uuid
 from abc import ABC, abstractmethod
 from collections import OrderedDict
@@ -89,6 +90,16 @@ DEFAULT_GRAPH_PARAMS: dict[str, Any] = {
 DEFAULT_SEARCH_K: int = 10
 
 MANIFEST_FILENAME = "index_manifest.json"
+
+# Protects the read→modify→write cycle on index_manifest.json.
+# All accesses to _read_manifest + _write_manifest in build_index and
+# delete_index must be wrapped in this lock.
+#
+# TODO(multi-replica): replace with a distributed lock for multi-process deployments.
+# Options:
+#   - filelock.FileLock(str(index_store / "manifest.lock"))  ← NFS-safe
+#   - Redis SET NX PX  ← multi-host
+_MANIFEST_LOCK = threading.Lock()
 
 
 # ---------------------------------------------------------------------------
@@ -365,35 +376,56 @@ class _IndexEntry:
 
 
 class _LRUIndexCache:
+    """LRU cache for ArrowSpace index entries.
+
+    Thread-safe via a reentrant lock (RLock). All public methods acquire
+    the lock before accessing the underlying OrderedDict.
+
+    RLock is used instead of Lock because _get_entry() may be called
+    from within methods that already hold an outer lock in future
+    batch-operation scenarios.
+
+    Expansion path (multi-replica): replace the in-process RLock with a
+    distributed lock. The public interface of this class does not change.
+    # TODO(multi-replica): extract lock to a LockProvider abstraction
+    #   so _LRUIndexCache can be backed by Redis or filelock transparently.
+    """
+
     def __init__(self, maxsize: int = 8) -> None:
         self._maxsize = max(1, maxsize)
         self._data: OrderedDict[str, _IndexEntry] = OrderedDict()
+        self._lock = threading.RLock()
 
     def get(self, key: str) -> _IndexEntry | None:
-        if key not in self._data:
-            return None
-        self._data.move_to_end(key)
-        return self._data[key]
+        with self._lock:
+            if key not in self._data:
+                return None
+            self._data.move_to_end(key)
+            return self._data[key]
 
     def put(self, key: str, entry: _IndexEntry) -> None:
-        if key in self._data:
-            self._data.move_to_end(key)
-        self._data[key] = entry
-        while len(self._data) > self._maxsize:
-            evicted, _ = self._data.popitem(last=False)
-            log.info("ArrowSpace cache evicted '%s'", evicted)
+        with self._lock:
+            if key in self._data:
+                self._data.move_to_end(key)
+            self._data[key] = entry
+            while len(self._data) > self._maxsize:
+                evicted, _ = self._data.popitem(last=False)
+                log.info("ArrowSpace cache evicted '%s'", evicted)
 
     def delete(self, key: str) -> bool:
-        if key in self._data:
-            del self._data[key]
-            return True
-        return False
+        with self._lock:
+            if key in self._data:
+                del self._data[key]
+                return True
+            return False
 
     def keys(self) -> list[str]:
-        return list(self._data.keys())
+        with self._lock:
+            return list(self._data.keys())
 
     def __contains__(self, key: str) -> bool:
-        return key in self._data
+        with self._lock:
+            return key in self._data
 
 
 # ---------------------------------------------------------------------------
@@ -607,11 +639,14 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
         Returns True if the entry existed (either in cache or manifest),
         False if nothing was found.
         """
-        manifest = _read_manifest(index_store)
-        existed = self._cache.delete(dataset_id) or (dataset_id in manifest)
+        with _MANIFEST_LOCK:
+            manifest = _read_manifest(index_store)
+            existed = self._cache.delete(dataset_id) or (dataset_id in manifest)
+            info = manifest.pop(dataset_id, {})
+            if existed:
+                _write_manifest(index_store, manifest)
 
         # Remove Parquet files written by arrowspace builder
-        info = manifest.pop(dataset_id, {})
         dataset_name = info.get("dataset_name", "")
         if dataset_name:
             for suffix in ("_items.parquet", "_graph.parquet"):
@@ -635,14 +670,6 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
             except Exception:
                 log.warning("Could not delete CSR dir %s", csr_dir, exc_info=True)
 
-        # Always write the updated manifest when the entry existed, regardless
-        # of the on-disk state.  The previous guard re-read the manifest after
-        # pop(), so the on-disk copy still contained the entry, making the
-        # condition almost always True — but in the wrong direction.  This is
-        # simpler and always correct.
-        if existed:
-            _write_manifest(index_store, manifest)
-
         return existed
 
     def indexed_datasets(self) -> list[str]:
@@ -664,11 +691,11 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
             )
         slug = self._slug(dataset_id)
         index_store.mkdir(parents=True, exist_ok=True)
-        # Re-use the existing dataset_name from the manifest so that rebuilding
-        # a dataset replaces the same Parquet files on disk.
-        manifest = _read_manifest(index_store)
-        existing = manifest.get(dataset_id, {})
-        dataset_name = existing.get("dataset_name") or self._new_dataset_name(slug)
+        # Generate tentative dataset_name for Parquet persistence.
+        # The authoritative name is resolved inside _MANIFEST_LOCK below
+        # to ensure the manifest read and write are consistent under
+        # concurrent builds.
+        dataset_name = self._new_dataset_name(slug)
 
         log.info(
             "Building index for '%s' (dataset_name='%s') shape=%s params=%s",
@@ -698,9 +725,15 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
         # Persist CSR (supplementary, for export/inspection)
         self._persist_csr(index_store, slug, gl, meta)
 
-        # Update manifest
-        manifest[dataset_id] = {"dataset_name": dataset_name, "graph_params": gp}
-        _write_manifest(index_store, manifest)
+        # Atomically read-modify-write the manifest.
+        # _MANIFEST_LOCK ensures concurrent build_index calls on different
+        # dataset_ids do not overwrite each other's entries.
+        with _MANIFEST_LOCK:
+            manifest = _read_manifest(index_store)
+            existing = manifest.get(dataset_id, {})
+            dataset_name = existing.get("dataset_name") or dataset_name
+            manifest[dataset_id] = {"dataset_name": dataset_name, "graph_params": gp}
+            _write_manifest(index_store, manifest)
 
         return meta
 
