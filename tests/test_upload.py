@@ -15,13 +15,13 @@ Test inventory:
     10. upload_commit — incomplete Zarr (empty shape) returns 422
 
 Security:
-    11. assert_path_within_roots — path inside root is allowed
-    12. assert_path_within_roots — path outside all roots raises 400
-    13. assert_path_within_roots — symlink traversal attempt raises 400
-    14. validate_zarr_summary — valid summary does not raise
-    15. validate_zarr_summary — empty shape raises 422
-    16. validate_zarr_summary — all-zero shape raises 422
-    17. validate_zarr_summary — empty dtype raises 422
+    11. _assert_path_within_roots — path inside root is allowed
+    12. _assert_path_within_roots — path outside all roots raises 400
+    13. _assert_path_within_roots — symlink traversal attempt raises 400
+    14. _validate_zarr_summary — valid summary does not raise
+    15. _validate_zarr_summary — empty shape raises 422
+    16. _validate_zarr_summary — all-zero shape raises 422
+    17. _validate_zarr_summary — empty dtype raises 422
 """
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ import pytest
 import zarr
 from fastapi.testclient import TestClient
 
-from arro_server.api.security import assert_path_within_roots, validate_zarr_summary
+from arro_server.api.routes import _assert_path_within_roots, _validate_zarr_summary
 from arro_server.storage import registry as registry_mod
 from arro_server.storage.base import DatasetHandle, DatasetSummary
 
@@ -275,40 +275,40 @@ def test_upload_commit_incomplete_zarr_returns_422(app_client):
 
 
 # ---------------------------------------------------------------------------
-# 11. Security: assert_path_within_roots -- valid path
+# 11. Security: _assert_path_within_roots -- valid path
 # ---------------------------------------------------------------------------
 
 
-def test_assert_path_within_roots_valid(tmp_path):
+def test__assert_path_within_roots_valid(tmp_path):
     """Path inside a root does not raise."""
     roots = {"main": tmp_path}
     nested = tmp_path / "subdir" / "array.zarr"
-    assert_path_within_roots(nested, roots)
+    _assert_path_within_roots(nested, roots)
 
 
 # ---------------------------------------------------------------------------
-# 12. Security: assert_path_within_roots -- path outside all roots
+# 12. Security: _assert_path_within_roots -- path outside all roots
 # ---------------------------------------------------------------------------
 
 
-def test_assert_path_within_roots_outside(tmp_path):
+def test__assert_path_within_roots_outside(tmp_path):
     """Path outside all configured roots raises HTTP 400."""
     from fastapi import HTTPException
 
     roots = {"main": tmp_path / "root_a"}
     outside = tmp_path / "root_b" / "array.zarr"
     with pytest.raises(HTTPException) as exc_info:
-        assert_path_within_roots(outside, roots)
+        _assert_path_within_roots(outside, roots)
     assert exc_info.value.status_code == 400
     assert "main" in exc_info.value.detail
 
 
 # ---------------------------------------------------------------------------
-# 13. Security: assert_path_within_roots -- symlink traversal attempt
+# 13. Security: _assert_path_within_roots -- symlink traversal attempt
 # ---------------------------------------------------------------------------
 
 
-def test_assert_path_within_roots_symlink_traversal(tmp_path):
+def test__assert_path_within_roots_symlink_traversal(tmp_path):
     """Symlink pointing outside the root is blocked after resolve()."""
     from fastapi import HTTPException
 
@@ -323,57 +323,57 @@ def test_assert_path_within_roots_symlink_traversal(tmp_path):
 
     roots = {"main": root_a}
     with pytest.raises(HTTPException) as exc_info:
-        assert_path_within_roots(attack_path, roots)
+        _assert_path_within_roots(attack_path, roots)
     assert exc_info.value.status_code == 400
 
 
 # ---------------------------------------------------------------------------
-# 14. Security: validate_zarr_summary -- valid summary
+# 14. Security: _validate_zarr_summary -- valid summary
 # ---------------------------------------------------------------------------
 
 
-def test_validate_zarr_summary_valid():
+def test__validate_zarr_summary_valid():
     """Valid shape and dtype do not raise."""
-    validate_zarr_summary("main--ds", (100, 32), "float32")
+    _validate_zarr_summary("main--ds", (100, 32), "float32")
 
 
 # ---------------------------------------------------------------------------
-# 15. Security: validate_zarr_summary -- empty shape raises 422
+# 15. Security: _validate_zarr_summary -- empty shape raises 422
 # ---------------------------------------------------------------------------
 
 
-def test_validate_zarr_summary_empty_shape():
+def test__validate_zarr_summary_empty_shape():
     """Scalar shape () raises HTTP 422."""
     from fastapi import HTTPException
 
     with pytest.raises(HTTPException) as exc_info:
-        validate_zarr_summary("main--ds", (), "float32")
+        _validate_zarr_summary("main--ds", (), "float32")
     assert exc_info.value.status_code == 422
 
 
 # ---------------------------------------------------------------------------
-# 16. Security: validate_zarr_summary -- all-zero shape raises 422
+# 16. Security: _validate_zarr_summary -- all-zero shape raises 422
 # ---------------------------------------------------------------------------
 
 
-def test_validate_zarr_summary_zero_shape():
+def test__validate_zarr_summary_zero_shape():
     """All-zero shape raises HTTP 422."""
     from fastapi import HTTPException
 
     with pytest.raises(HTTPException) as exc_info:
-        validate_zarr_summary("main--ds", (0, 32), "float32")
+        _validate_zarr_summary("main--ds", (0, 32), "float32")
     assert exc_info.value.status_code == 422
 
 
 # ---------------------------------------------------------------------------
-# 17. Security: validate_zarr_summary -- empty dtype raises 422
+# 17. Security: _validate_zarr_summary -- empty dtype raises 422
 # ---------------------------------------------------------------------------
 
 
-def test_validate_zarr_summary_empty_dtype():
+def test__validate_zarr_summary_empty_dtype():
     """Empty dtype string raises HTTP 422."""
     from fastapi import HTTPException
 
     with pytest.raises(HTTPException) as exc_info:
-        validate_zarr_summary("main--ds", (100, 32), "")
+        _validate_zarr_summary("main--ds", (100, 32), "")
     assert exc_info.value.status_code == 422

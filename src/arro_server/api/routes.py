@@ -62,11 +62,69 @@ from .schemas import (
     UploadInitRequest,
     UploadInitResponse,
 )
-from .security import assert_path_within_roots, validate_zarr_summary
 from .serializers import array_to_payload
 
 router = APIRouter(prefix="/api")
 admin_router = APIRouter(prefix="/api/admin")
+
+
+# ---------------------------------------------------------------------------
+# Upload security helpers (private — used only by upload_commit)
+# ---------------------------------------------------------------------------
+
+
+def _assert_path_within_roots(fs_path: Path, roots: dict[str, Path]) -> None:
+    """Raise HTTP 400 if fs_path is not inside any configured data root.
+
+    Uses Path.resolve() to eliminate symlink and '..' traversal tricks.
+    Error messages expose root labels only, never filesystem paths.
+    """
+    resolved = fs_path.resolve()
+    for root_path in roots.values():
+        try:
+            resolved.relative_to(root_path.resolve())
+            return
+        except ValueError:
+            continue
+    raise HTTPException(
+        status_code=400,
+        detail=(
+            f"fs_path is not inside any configured data root. "
+            f"Configured roots: {list(roots.keys())}. "
+            f"Ensure the path was obtained from POST /upload/init."
+        ),
+    )
+
+
+def _validate_zarr_summary(dataset_id: str, shape: tuple[int, ...], dtype: str) -> None:
+    """Raise HTTP 422 if the Zarr summary indicates an incomplete write."""
+    if not shape:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Dataset '{dataset_id}' has scalar shape () — "
+                "the Zarr array may be incomplete. "
+                "Ensure the write is fully flushed before calling /upload/commit."
+            ),
+        )
+    if any(dim == 0 for dim in shape):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Dataset '{dataset_id}' has zero-size shape {list(shape)} — "
+                "the Zarr array appears empty. "
+                "Ensure the array contains data before calling /upload/commit."
+            ),
+        )
+    if not dtype:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Dataset '{dataset_id}' has empty dtype — "
+                "the Zarr metadata may be incomplete. "
+                "Ensure zarr.json is fully written before calling /upload/commit."
+            ),
+        )
 
 
 def _registry() -> StorageRegistry:
@@ -244,7 +302,7 @@ def upload_commit(
 
     fs_path = Path(body.fs_path).expanduser().resolve()
 
-    assert_path_within_roots(fs_path, settings.resolved_roots)
+    _assert_path_within_roots(fs_path, settings.resolved_roots)
 
     index_stale = adapter.has_index(body.dataset_id)
 
@@ -256,7 +314,7 @@ def upload_commit(
     h = reg.open(body.dataset_id)
     s = h.summary
 
-    validate_zarr_summary(body.dataset_id, s.shape, s.dtype)
+    _validate_zarr_summary(body.dataset_id, s.shape, s.dtype)
 
     return UploadCommitResponse(
         dataset_id=body.dataset_id,

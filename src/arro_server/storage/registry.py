@@ -173,34 +173,16 @@ class StorageRegistry:
     def _backend_for_label(self, label: str) -> StorageBackend:
         """Return the first backend that owns the given root label.
 
-        Iterates registered backends and returns the first one for which
-        owns_label(label) returns True. Uses the Protocol method owns_label()
-        rather than inspecting private backend attributes directly — this
-        keeps StorageRegistry decoupled from backend implementation details
-        and ensures correctness when multiple heterogeneous backends are
-        registered (e.g. ZarrFilesystemBackend + future S3Backend).
-
-        Args:
-            label: Root label extracted from a dataset_id by decode_dataset_id().
-
-        Returns:
-            The first StorageBackend that owns label.
+        Uses getattr(b, '_roots', None) to check label membership directly.
+        When a second backend type is added, extend this with an explicit
+        isinstance check or add a public roots() property to the Protocol.
 
         Raises:
-            DatasetNotFound: if no registered backend owns label, with a
-                diagnostic message listing all registered backend names.
-                This is a hard failure — there is no silent fallback.
-                A missing label indicates a misconfiguration (e.g. the
-                dataset_id was constructed with a label that does not
-                correspond to any configured data root).
-
-        Thread safety:
-            self._backends is set once in __init__ and never mutated.
-            owns_label() implementations must be safe without a lock
-            (see StorageBackend.owns_label() contract).
+            DatasetNotFound: if no registered backend owns label.
         """
         for b in self._backends:
-            if b.owns_label(label):
+            roots: dict | None = getattr(b, "_roots", None)
+            if roots is not None and label in roots:
                 return b
         registered = [b.name for b in self._backends]
         raise DatasetNotFound(
