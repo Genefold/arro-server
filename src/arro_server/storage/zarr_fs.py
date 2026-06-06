@@ -202,6 +202,69 @@ class ZarrFilesystemBackend:
             extra={"attrs": attrs},
         )
 
+    # ----- summarize ---------------------------------------------------
+
+    def summarize(self, dataset_id: str, fs_path: Path) -> DatasetSummary:
+        """Return a DatasetSummary for the single Zarr node at fs_path.
+
+        Opens exactly one zarr node (one zarr.open() call) and delegates to
+        _summarize_array. This is the O(1) path used by
+        StorageRegistry.register_dataset() after POST /upload/commit.
+
+        The cost is identical to what _scan_root pays per node during a full
+        scan, but scoped to a single known path — no directory walk, no
+        iterdir(), no recursive _collect().
+
+        Args:
+            dataset_id: URL-safe dataset ID used as the summary's dataset_id.
+                        Must be pre-computed by the caller (upload handler).
+            fs_path:    Absolute path to the Zarr array or group root directory.
+
+        Returns:
+            DatasetSummary with kind='array'.
+
+        Raises:
+            DatasetNotFound: if zarr is unavailable, fs_path does not exist,
+                             or the node at fs_path is a group (not an array).
+        """
+        _require_zarr()
+        label, rel = decode_dataset_id(dataset_id)
+        if not fs_path.exists():
+            raise DatasetNotFound(dataset_id)
+        try:
+            arr = zarr.open(str(fs_path), mode="r")  # type: ignore[union-attr]
+        except Exception as exc:
+            raise DatasetNotFound(f"{dataset_id} ({exc})") from exc
+        if not isinstance(arr, zarr.Array):  # type: ignore[union-attr]
+            raise DatasetNotFound(f"{dataset_id} is a group, not an array")
+        return self._summarize_array(label, fs_path.parent, rel, arr)
+
+    # ----- label ownership --------------------------------------------
+
+    def owns_label(self, label: str) -> bool:
+        """Return True if label is a configured root in this backend.
+
+        Implements StorageBackend.owns_label(). Checks whether label is a
+        key in self._roots — the dict of {label: Path} configured at
+        construction time via Settings.resolved_roots.
+
+        This method exists to let StorageRegistry.register_dataset() route
+        to the correct backend without inspecting _roots directly (which
+        would create structural coupling between registry and backend
+        implementation details).
+
+        Args:
+            label: Root label string (e.g. "main", "archive").
+
+        Returns:
+            True if label is in self._roots, False otherwise.
+
+        Thread safety:
+            Safe without a lock. self._roots is set once in __init__
+            and never mutated after construction.
+        """
+        return label in self._roots
+
     # ----- open --------------------------------------------------------
 
     def open(self, dataset_id: str) -> DatasetHandle:
