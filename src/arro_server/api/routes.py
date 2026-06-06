@@ -103,7 +103,7 @@ def admin_reload(
     from ..arrowspace_adapter import reset_adapter_cache
     from ..storage.registry import get_registry, reset_registry_cache
 
-    reset_registry_cache()        # marks _cache = None (invalidate, not singleton destroy)
+    reset_registry_cache()  # marks _cache = None (invalidate, not singleton destroy)
     reset_adapter_cache()
 
     registry = get_registry()
