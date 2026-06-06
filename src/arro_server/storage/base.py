@@ -102,3 +102,22 @@ class StorageBackend(Protocol):
     def list_datasets(self) -> list[DatasetSummary]: ...
 
     def open(self, dataset_id: str) -> DatasetHandle: ...
+
+    def summarize(self, dataset_id: str, fs_path: Path) -> DatasetSummary:
+        """Return a DatasetSummary for a single dataset at fs_path.
+
+        Called by StorageRegistry.register_dataset() for O(1) post-upload
+        registration. Implementors must open only the single node at fs_path
+        — equivalent to what _scan_root does per node, but scoped to one path.
+
+        Args:
+            dataset_id: URL-safe dataset ID (e.g. "main--cube").
+            fs_path:    Absolute filesystem path to the Zarr node root dir.
+
+        Returns:
+            DatasetSummary for the node at fs_path.
+
+        Raises:
+            DatasetNotFound: if fs_path does not contain a valid dataset.
+        """
+        ...

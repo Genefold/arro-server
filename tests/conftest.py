@@ -62,12 +62,12 @@ def configured_app(tmp_zarr_root: Path):
     os.environ["ARRO_SERVER_DATA_ROOTS"] = f"main={tmp_zarr_root}"
     os.environ["ARRO_SERVER_SERVE_FRONTEND"] = "false"
     settings_mod.reset_settings_cache()
-    registry_mod.reset_registry_cache()
+    registry_mod.get_registry.cache_clear()  # full singleton reset for test isolation
     arrowspace_adapter.reset_adapter_cache()
     app = create_app()
     yield app
     os.environ.pop("ARRO_SERVER_DATA_ROOTS", None)
     os.environ.pop("ARRO_SERVER_SERVE_FRONTEND", None)
     settings_mod.reset_settings_cache()
-    registry_mod.reset_registry_cache()
+    registry_mod.get_registry.cache_clear()  # full singleton reset for test isolation
     arrowspace_adapter.reset_adapter_cache()

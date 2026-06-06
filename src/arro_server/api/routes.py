@@ -103,11 +103,11 @@ def admin_reload(
     from ..arrowspace_adapter import reset_adapter_cache
     from ..storage.registry import get_registry, reset_registry_cache
 
-    reset_registry_cache()
+    reset_registry_cache()        # marks _cache = None (invalidate, not singleton destroy)
     reset_adapter_cache()
 
     registry = get_registry()
-    datasets = registry.list_datasets()
+    datasets = registry.list_datasets()  # triggers full O(N) rescan here (expected for admin)
 
     new_adapter = load_adapter()
     index_store = Path(settings.index_store).expanduser().resolve()

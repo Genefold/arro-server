@@ -26,7 +26,7 @@ def client_with_token(tmp_zarr_root):
     os.environ["ARRO_SERVER_SERVE_FRONTEND"] = "false"
     os.environ["ARRO_SERVER_ADMIN_TOKEN"] = "secret-token"
     settings_mod.reset_settings_cache()
-    registry_mod.reset_registry_cache()
+    registry_mod.get_registry.cache_clear()  # full singleton reset for test isolation
     arrowspace_adapter.reset_adapter_cache()
     app = create_app()
     with TestClient(app, raise_server_exceptions=True) as c:
@@ -38,7 +38,7 @@ def client_with_token(tmp_zarr_root):
     ):
         os.environ.pop(key, None)
     settings_mod.reset_settings_cache()
-    registry_mod.reset_registry_cache()
+    registry_mod.get_registry.cache_clear()  # full singleton reset for test isolation
     arrowspace_adapter.reset_adapter_cache()
 
 
