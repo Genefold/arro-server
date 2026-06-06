@@ -196,7 +196,7 @@ def upload_init(
                 f"Use a dataset_id of the form '{body.root}--<name>'."
             ),
         )
-    upload_path = root_path / rel.replace("/", "/")
+    upload_path = root_path / rel
 
     return UploadInitResponse(
         dataset_id=body.dataset_id,
