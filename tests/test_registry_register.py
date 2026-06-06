@@ -375,8 +375,7 @@ def test_backend_for_label_raises_for_unknown_label(tmp_path: Path) -> None:
     from arro_server.errors import DatasetNotFound
 
     backend = _make_mock_backend([])
-    # Only owns "main", not "archive"
-    backend.owns_label.side_effect = lambda label: label == "main"
+    # backend._roots only has "main", so "archive" is not owned
 
     registry = StorageRegistry([backend])
 
