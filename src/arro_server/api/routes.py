@@ -30,6 +30,8 @@ GET  /api/datasets/{id}/spot/subgraphs/centroids
 GET  /api/datasets/{id}/spot/subgraphs/motives
 GET  /api/datasets/{id}/graph?fmt=csr|dense                -- Laplacian matrix export
 GET  /api/datasets/{id}/spectral_metrics                   -- full spectral analytics
+POST /api/upload/init     -- validate dataset_id + root, return upload_path
+POST /api/upload/commit   -- register uploaded Zarr into StorageRegistry cache
 POST /api/admin/reload                                     -- hot-reload StorageRegistry + ArrowSpaceAdapter cache
 """
 
@@ -55,7 +57,12 @@ from .schemas import (
     SearchHybridRequest,
     SearchLinearRequest,
     SearchModeRequest,
+    UploadCommitRequest,
+    UploadCommitResponse,
+    UploadInitRequest,
+    UploadInitResponse,
 )
+from .security import assert_path_within_roots, validate_zarr_summary
 from .serializers import array_to_payload
 
 router = APIRouter(prefix="/api")
@@ -122,6 +129,144 @@ def admin_reload(
         "data_roots": list(settings.resolved_roots.keys()),
         "indexed_datasets": loaded,
     }
+
+
+# ---------------------------------------------------------------------------
+# Upload — two-phase dataset registration (#21)
+# ---------------------------------------------------------------------------
+
+
+@router.post("/upload/init", response_model=UploadInitResponse)
+def upload_init(
+    body: UploadInitRequest,
+    settings: Settings = Depends(get_settings),
+) -> UploadInitResponse:
+    """Phase 1 of two-phase upload: validate and reserve an upload path.
+
+    Validates that ``body.root`` is a configured data root and that
+    ``body.dataset_id`` starts with ``body.root`` as its label prefix.
+    Returns the absolute filesystem path where the client must write the
+    Zarr v3 array directory.
+
+    The server does NOT create any file or directory.  The client is
+    responsible for writing a valid Zarr v3 array to ``upload_path`` before
+    calling POST /upload/commit.
+
+    Args:
+        body: UploadInitRequest with dataset_id and root.
+        settings: Injected Settings singleton.
+
+    Returns:
+        UploadInitResponse with upload_path, dataset_id, root.
+
+    Raises:
+        HTTPException(404): if body.root is not in ARRO_SERVER_DATA_ROOTS.
+        HTTPException(400): if body.dataset_id does not start with body.root
+            as its label component (i.e. label extracted by decode_dataset_id
+            does not match body.root).
+    """
+    from ..storage.base import decode_dataset_id
+
+    roots = settings.resolved_roots
+    if body.root not in roots:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"Root '{body.root}' is not configured. "
+                f"Configured roots: {list(roots.keys())}."
+            ),
+        )
+
+    label, rel = decode_dataset_id(body.dataset_id)
+    if label != body.root:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"dataset_id label '{label}' does not match root '{body.root}'. "
+                f"dataset_id must start with '{body.root}--'."
+            ),
+        )
+
+    root_path = roots[body.root]
+    if rel in (".", ""):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"dataset_id '{body.dataset_id}' has no path component. "
+                f"Use a dataset_id of the form '{body.root}--<name>'."
+            ),
+        )
+    upload_path = root_path / rel.replace("/", "/")
+
+    return UploadInitResponse(
+        dataset_id=body.dataset_id,
+        upload_path=str(upload_path),
+        root=body.root,
+    )
+
+
+@router.post("/upload/commit", response_model=UploadCommitResponse)
+def upload_commit(
+    body: UploadCommitRequest,
+    settings: Settings = Depends(get_settings),
+    reg: StorageRegistry = Depends(_registry),
+    adapter: ArrowSpaceAdapter = Depends(_arrowspace),
+) -> UploadCommitResponse:
+    """Phase 2 of two-phase upload: register the uploaded Zarr dataset.
+
+    Validates fs_path against configured data roots (path-traversal guard),
+    opens the Zarr node at fs_path, and inserts the DatasetSummary into
+    the StorageRegistry cache via register_dataset().
+
+    After a successful commit:
+    - The dataset is immediately visible in GET /api/datasets (O(1), no rescan).
+    - If an ArrowSpace index already exists for this dataset_id (overwrite
+      scenario), ``index_stale: true`` is returned — the client should call
+      POST /api/datasets/{id}/index to rebuild.
+
+    Args:
+        body: UploadCommitRequest with dataset_id and fs_path.
+        settings: Injected Settings singleton.
+        reg: Injected StorageRegistry singleton.
+        adapter: Injected ArrowSpaceAdapter singleton.
+
+    Returns:
+        UploadCommitResponse with shape, dtype, chunks, index_stale.
+
+    Raises:
+        HTTPException(400): if fs_path is outside all configured data roots
+            (path-traversal attempt).
+        HTTPException(404): if no Zarr array exists at fs_path (dataset not
+            written or wrong path).
+        HTTPException(422): if the Zarr array at fs_path is incomplete
+            (empty shape, zero-size, or missing dtype).
+    """
+    from ..errors import DatasetNotFound
+
+    fs_path = Path(body.fs_path).expanduser().resolve()
+
+    assert_path_within_roots(fs_path, settings.resolved_roots)
+
+    index_stale = adapter.has_index(body.dataset_id)
+
+    try:
+        reg.register_dataset(body.dataset_id, fs_path)
+    except DatasetNotFound:
+        raise
+
+    h = reg.open(body.dataset_id)
+    s = h.summary
+
+    validate_zarr_summary(body.dataset_id, s.shape, s.dtype)
+
+    return UploadCommitResponse(
+        dataset_id=body.dataset_id,
+        registered=True,
+        shape=list(s.shape),
+        dtype=s.dtype,
+        chunks=list(s.chunks) if s.chunks else None,
+        index_stale=index_stale,
+    )
 
 
 # ---------------------------------------------------------------------------

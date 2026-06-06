@@ -99,3 +99,96 @@ class SearchModeRequest(BaseModel):
     tau: float = Field(1.0, description="Tau param for taumode.")
     alpha: float = Field(0.5, ge=0.0, le=1.0, description="Blend for hybrid mode.")
     k: int = Field(10, ge=1, description="Top-k for energy and linear_sorted.")
+
+
+# ---------------------------------------------------------------------------
+# Upload schemas (#21)
+# ---------------------------------------------------------------------------
+
+
+class UploadInitRequest(BaseModel):
+    """Request body for POST /api/upload/init.
+
+    The client provides the intended dataset_id and the root label under
+    which the dataset will live.  The server validates both and returns the
+    absolute filesystem path where the client should write the Zarr array.
+
+    Attributes:
+        dataset_id: URL-safe dataset ID in the form ``<root>--<path>``.
+                    E.g. ``"main--my_embeddings"``.
+                    Must not contain path separators (``/``, ``\\``).
+        root:       Root label that must exist in ARRO_SERVER_DATA_ROOTS.
+                    E.g. ``"main"``.
+    """
+
+    dataset_id: str = Field(
+        ...,
+        description="URL-safe dataset ID, e.g. 'main--my_embeddings'.",
+        min_length=1,
+        max_length=256,
+        pattern=r"^[A-Za-z0-9_\-]+$",
+    )
+    root: str = Field(
+        ...,
+        description="Root label that must exist in ARRO_SERVER_DATA_ROOTS.",
+        min_length=1,
+        max_length=64,
+        pattern=r"^[A-Za-z0-9_\-]+$",
+    )
+
+
+class UploadInitResponse(BaseModel):
+    """Response body for POST /api/upload/init.
+
+    Attributes:
+        dataset_id:  The validated dataset ID, echoed back.
+        upload_path: Absolute filesystem path where the client must write
+                     the Zarr v3 array directory.  The path is guaranteed
+                     to be inside a configured data root.
+        root:        Root label confirmed by the server.
+    """
+
+    dataset_id: str
+    upload_path: str
+    root: str
+
+
+class UploadCommitRequest(BaseModel):
+    """Request body for POST /api/upload/commit.
+
+    The client calls this after writing the Zarr array to upload_path.
+    The server validates the path, opens the Zarr node, and inserts the
+    dataset into the StorageRegistry cache via register_dataset().
+
+    Attributes:
+        dataset_id: The dataset ID returned by /upload/init.
+        fs_path:    The upload_path returned by /upload/init.
+                    The server re-validates this against resolved_roots
+                    before any filesystem access (path-traversal guard).
+    """
+
+    dataset_id: str = Field(..., min_length=1, max_length=256)
+    fs_path: str = Field(..., min_length=1, max_length=4096)
+
+
+class UploadCommitResponse(BaseModel):
+    """Response body for POST /api/upload/commit.
+
+    Attributes:
+        dataset_id:    The registered dataset ID.
+        registered:    Always True on success.
+        shape:         Shape of the registered array, e.g. [1000, 128].
+        dtype:         Dtype string, e.g. "float32".
+        chunks:        Chunk shape if available, else None.
+        index_stale:   True if an ArrowSpace index already existed for this
+                       dataset_id before the commit (i.e. the dataset was
+                       overwritten).  The client should rebuild the index via
+                       POST /datasets/{id}/index if True.
+    """
+
+    dataset_id: str
+    registered: bool = True
+    shape: list[int]
+    dtype: str
+    chunks: list[int] | None = None
+    index_stale: bool = False
