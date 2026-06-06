@@ -277,3 +277,112 @@ def test_zarr_backend_summarize_raises_for_missing_path(tmp_path: Path) -> None:
     backend = ZarrFilesystemBackend({"main": tmp_path})
     with pytest.raises(DatasetNotFound):
         backend.summarize("main--nonexistent", tmp_path / "nonexistent.zarr")
+
+
+# ---------------------------------------------------------------------------
+# 9. register_dataset() overwrite semantics
+# ---------------------------------------------------------------------------
+
+
+def test_register_dataset_overwrite_replaces_existing_entry(tmp_path: Path) -> None:
+    """register_dataset() on an existing dataset_id silently overwrites.
+
+    This is the correct behaviour for POST /upload on an already-registered
+    dataset (rebuild/replace scenario). The cache must contain exactly one
+    entry for the dataset_id after the overwrite — no duplicates.
+
+    Regression test for the dict-based cache: dict assignment is idempotent
+    on key, so no special handling is needed. This test documents and locks
+    in that semantic contract.
+    """
+    v1 = _make_summary("main--ds")
+    v2 = DatasetSummary(
+        dataset_id="main--ds",
+        root="main",
+        path="ds",
+        shape=(20, 8),
+        dtype="float32",
+        chunks=(20, 8),
+        kind="array",
+    )
+    backend = _make_mock_backend([v1])
+    backend.summarize.return_value = v2
+
+    registry = StorageRegistry([backend])
+    registry.list_datasets()  # warm cache with v1
+
+    registry.register_dataset("main--ds", tmp_path / "ds.zarr")
+
+    result = {d.dataset_id: d for d in registry.list_datasets()}
+    assert result["main--ds"].shape == (20, 8), "v2 must overwrite v1"
+    assert result["main--ds"].dtype == "float32", "v2 dtype must replace v1 dtype"
+    assert len(result) == 1, "overwrite must not create duplicate entries"
+
+
+# ---------------------------------------------------------------------------
+# 10. register_dataset() leaves cache intact when summarize() raises
+# ---------------------------------------------------------------------------
+
+
+def test_register_dataset_summarize_failure_leaves_cache_intact(tmp_path: Path) -> None:
+    """If summarize() raises DatasetNotFound, the existing cache is unmodified.
+
+    summarize() is called outside the lock (it does blocking I/O). If it
+    raises, the lock is never acquired and _cache is never written.
+    This test verifies that the pre-existing cached entries survive a failed
+    register_dataset() call — i.e. a bad upload path cannot corrupt the
+    registry state for other datasets.
+
+    Scenario: one healthy dataset is cached; register_dataset() is called
+    with a path that does not exist (simulated by summarize() raising).
+    After the failure, the healthy dataset must still be visible.
+    """
+    from arro_server.errors import DatasetNotFound
+
+    existing = _make_summary("main--healthy")
+    backend = _make_mock_backend([existing])
+    # Simulate a missing or unreadable Zarr file
+    backend.summarize.side_effect = DatasetNotFound("bad path — zarr.open() failed")
+
+    registry = StorageRegistry([backend])
+    registry.list_datasets()  # warm cache with "main--healthy"
+
+    with pytest.raises(DatasetNotFound):
+        registry.register_dataset("main--bad", tmp_path / "bad.zarr")
+
+    # Cache must be unmodified: healthy entry present, bad entry absent
+    result_ids = {d.dataset_id for d in registry.list_datasets()}
+    assert "main--healthy" in result_ids, "pre-existing entry must survive summarize() failure"
+    assert "main--bad" not in result_ids, "failed register must not insert partial entry"
+    # No extra scan should have been triggered
+    assert backend.list_datasets.call_count == 1, "cache must not be invalidated on failure"
+
+
+# ---------------------------------------------------------------------------
+# 11. _backend_for_label raises DatasetNotFound for unknown label
+# ---------------------------------------------------------------------------
+
+
+def test_backend_for_label_raises_for_unknown_label(tmp_path: Path) -> None:
+    """_backend_for_label() must raise DatasetNotFound (not silently fallback)
+    when no backend owns the requested label.
+
+    This verifies the removal of the silent 'return self._backends[0]' fallback.
+    An unknown label indicates misconfiguration and must surface as an explicit
+    error, not as a wrong-backend call that may produce confusing downstream
+    errors.
+    """
+    from arro_server.errors import DatasetNotFound
+
+    backend = _make_mock_backend([])
+    # Only owns "main", not "archive"
+    backend.owns_label.side_effect = lambda label: label == "main"
+
+    registry = StorageRegistry([backend])
+
+    with pytest.raises(DatasetNotFound) as exc_info:
+        registry.register_dataset("archive--ds", tmp_path / "ds.zarr")
+
+    assert "archive" in str(exc_info.value.detail).lower(), (
+        "Error message must mention the unknown label for diagnostics"
+    )

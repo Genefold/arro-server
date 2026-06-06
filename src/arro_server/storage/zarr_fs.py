@@ -239,6 +239,32 @@ class ZarrFilesystemBackend:
             raise DatasetNotFound(f"{dataset_id} is a group, not an array")
         return self._summarize_array(label, fs_path.parent, rel, arr)
 
+    # ----- label ownership --------------------------------------------
+
+    def owns_label(self, label: str) -> bool:
+        """Return True if label is a configured root in this backend.
+
+        Implements StorageBackend.owns_label(). Checks whether label is a
+        key in self._roots — the dict of {label: Path} configured at
+        construction time via Settings.resolved_roots.
+
+        This method exists to let StorageRegistry.register_dataset() route
+        to the correct backend without inspecting _roots directly (which
+        would create structural coupling between registry and backend
+        implementation details).
+
+        Args:
+            label: Root label string (e.g. "main", "archive").
+
+        Returns:
+            True if label is in self._roots, False otherwise.
+
+        Thread safety:
+            Safe without a lock. self._roots is set once in __init__
+            and never mutated after construction.
+        """
+        return label in self._roots
+
     # ----- open --------------------------------------------------------
 
     def open(self, dataset_id: str) -> DatasetHandle:

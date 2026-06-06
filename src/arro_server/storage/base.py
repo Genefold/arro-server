@@ -121,3 +121,28 @@ class StorageBackend(Protocol):
             DatasetNotFound: if fs_path does not contain a valid dataset.
         """
         ...
+
+    def owns_label(self, label: str) -> bool:
+        """Return True if this backend owns datasets under the given root label.
+
+        Used by StorageRegistry._backend_for_label() to route
+        register_dataset() calls to the correct backend without inspecting
+        private attributes.
+
+        A backend "owns" a label if it was configured with a root or bucket
+        under that name. For ZarrFilesystemBackend, this means the label is
+        a key in self._roots. For future S3/GCS backends, it means the label
+        maps to a configured bucket or prefix.
+
+        Args:
+            label: Root label extracted from a dataset_id via decode_dataset_id().
+                   E.g. for "main--cube", label is "main".
+
+        Returns:
+            True if this backend can serve or register datasets under label.
+
+        Thread safety:
+            Implementations must be safe to call without a lock. The label
+            registry is set once at construction and never mutated.
+        """
+        ...
