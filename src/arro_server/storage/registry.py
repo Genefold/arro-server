@@ -31,16 +31,6 @@ preserves the object across reloads.
 ``admin_reload`` and test teardown) and now delegates to ``invalidate()``.
 Tests that need full singleton reset can still call
 ``get_registry.cache_clear()`` directly in teardown.
-
-Multi-replica expansion
------------------------
-For multi-process or multi-host deployments, replace the in-process
-``_lock`` with a distributed lock and publish a ``dataset_registered``
-event after ``register_dataset()``:
-
-    # TODO(multi-replica): publish event after register_dataset
-    # await redis.publish("arro:dataset:registered",
-    #                     json.dumps({"id": dataset_id}))
 """
 
 from __future__ import annotations
@@ -113,10 +103,6 @@ class StorageRegistry:
         cache — not an empty one — preventing silent omission of pre-existing
         datasets on the next GET /datasets call.
 
-        The full O(N) rescan (via invalidate() + list_datasets()) is still
-        recommended in a background task for eventual consistency with
-        datasets written externally (e.g. arro-memory via shared volume).
-
         Args:
             dataset_id: URL-safe dataset ID for the new dataset.
             fs_path:    Absolute filesystem path to the Zarr node root dir.
@@ -127,12 +113,6 @@ class StorageRegistry:
         Thread safety:
             Safe to call concurrently from multiple threads. Uses the same
             RLock as list_datasets() and invalidate().
-
-        # TODO(multi-replica): after inserting into _cache, publish a
-        # "dataset_registered" event to a message bus so other replicas can
-        # update their local caches without a full scan:
-        #   await redis.publish("arro:dataset:registered",
-        #                       json.dumps({"id": dataset_id}))
         """
         label, _ = decode_dataset_id(dataset_id)
         backend = self._backend_for_label(label)
