@@ -18,7 +18,6 @@ Known limitation NOT tested (by design):
 from __future__ import annotations
 
 import os
-import shutil
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -223,35 +222,33 @@ def test_delete_twice_returns_404_on_second(registered_dataset):
     assert r.status_code == 404
 
 
-def test_delete_path_traversal_returns_403(registered_dataset):
-    """If the dataset's fs_path resolves outside all data roots → HTTP 403.
+def test_delete_path_traversal_returns_403(registered_dataset, monkeypatch):
+    """Dataset whose resolved fs_path is outside all data roots → HTTP 403.
 
-    Scenario: register a dataset, then move its directory elsewhere and
-    create a symlink at the original path pointing outside the root.
-    reg.open() follows the symlink when opening zarr, but the path traversal
-    guard resolves the fs_path and detects it is outside the root.
+    Mocks h.fs_path directly so the test does not depend on whether
+    ZarrFilesystemBackend resolves symlinks during open(). The unit
+    under test is _assert_dataset_path_within_roots, not the backend.
     """
+    from arro_server.storage import zarr_fs
+
     client, root_dir, dataset_id = registered_dataset
-    zarr_path = root_dir / "test-delete"
 
-    # Save the zarr directory elsewhere
-    outside_path = root_dir.parent / "outside_zarr"
-    if outside_path.exists():
-        shutil.rmtree(str(outside_path))
-    shutil.move(str(zarr_path), str(outside_path))
+    outside_path = root_dir.parent / "outside_zarr" / "test-delete"
+    outside_path.parent.mkdir(exist_ok=True)
 
-    # Replace with symlink pointing outside the root
-    zarr_path.symlink_to(outside_path)
+    original_open = zarr_fs.ZarrFilesystemBackend.open
 
-    # Verify zarr is accessible via the symlink
-    arr = zarr.open(str(zarr_path), mode="r")
-    assert arr.shape == (10, 4)
+    def patched_open(self, did):
+        handle = original_open(self, did)
+        # Override fs_path to simulate a dataset that resolved outside roots
+        handle.fs_path = outside_path
+        return handle
 
-    # DELETE must reject with 403 (path traversal)
+    monkeypatch.setattr(zarr_fs.ZarrFilesystemBackend, "open", patched_open)
+
     r = client.delete(f"/api/datasets/{dataset_id}")
     assert r.status_code == 403
-    body = r.json()
-    assert "outside" in body["detail"].lower()
+    assert "outside" in r.json()["detail"].lower()
 
 
 # ---------------------------------------------------------------------------
