@@ -15,6 +15,7 @@ GET  /api/datasets/{id}/manifold
 GET  /api/datasets/{id}/search               -- keyword (sidecar)
 POST /api/datasets/{id}/index                -- build index
 DELETE /api/datasets/{id}/index              -- delete index + purge files
+DELETE /api/datasets/{dataset_id}            -- delete dataset + index artefacts
 GET  /api/datasets/{id}/lambdas              -- eigenvalue distribution
 GET  /api/datasets/{id}/graph_laplacian      -- GL metadata
 GET  /api/datasets/{id}/items                -- all items from index
@@ -92,6 +93,35 @@ def _assert_path_within_roots(fs_path: Path, roots: dict[str, Path]) -> None:
             f"fs_path is not inside any configured data root. "
             f"Configured roots: {list(roots.keys())}. "
             f"Ensure the path was obtained from POST /upload/init."
+        ),
+    )
+
+
+def _assert_dataset_path_within_roots(fs_path: Path, roots: dict[str, Path]) -> None:
+    """Raise HTTP 403 if fs_path is not inside any configured data root.
+
+    Separate from _assert_path_within_roots (which raises 400) because:
+    - 403 is semantically correct for DELETE: the resource exists but the
+      caller is not permitted to delete a path outside configured roots.
+    - 400 is kept for /upload/commit where the error is a malformed request
+      (the path was not obtained from /upload/init), not a permissions issue.
+
+    Uses Path.resolve() to eliminate symlink and '..' traversal tricks.
+    Error messages expose root labels only, never filesystem paths.
+    """
+    resolved = fs_path.resolve()
+    for root_path in roots.values():
+        try:
+            resolved.relative_to(root_path.resolve())
+            return
+        except ValueError:
+            continue
+    raise HTTPException(
+        status_code=403,
+        detail=(
+            f"Dataset path is outside all configured data roots. "
+            f"Configured roots: {list(roots.keys())}. "
+            f"Path traversal attempts are rejected."
         ),
     )
 
@@ -788,3 +818,119 @@ def delete_index(
             detail=f"No index found for dataset '{dataset_id}'.",
         )
     return {"id": dataset_id, "deleted": True}
+
+
+# IMPORTANT — route ordering: this DELETE /{dataset_id:path} MUST be the
+# last DELETE route registered on `router`. FastAPI resolves `:path` routes
+# in registration order (first match wins). Registering this before
+# DELETE /{dataset_id:path}/index would cause DELETE .../index to be
+# incorrectly routed to delete_dataset instead of delete_index.
+# If you add new DELETE sub-routes (e.g. /{id}/metadata), register them
+# BEFORE this line.
+@router.delete("/datasets/{dataset_id:path}")
+def delete_dataset(
+    dataset_id: str,
+    settings: Settings = Depends(get_settings),
+    reg: StorageRegistry = Depends(_registry),
+    adapter: ArrowSpaceAdapter = Depends(_arrowspace),
+) -> dict[str, Any]:
+    """Delete a dataset: removes the Zarr directory from disk, any associated
+    ArrowSpace index artefacts, and evicts the dataset from the registry cache.
+
+    Sequence (order matters — see design notes):
+      1. reg.open(dataset_id)          → resolve fs_path; 404 if not found
+      2. path traversal guard          → 403 if outside all data roots
+      3. reg.invalidate_dataset()      → evict from cache BEFORE touching disk
+                                         (reduces race window for new requests)
+      4. adapter.delete_index()        → remove Parquet + CSR Zarr + manifest entry
+                                         (idempotent: returns False if no index)
+      5. shutil.rmtree(fs_path)        → delete the Zarr directory
+         - FileNotFoundError → treated as success (idempotent)
+         - OSError/PermissionError → HTTP 500 with explicit message
+           NOTE: at this point the index is already deleted (step 4) and the
+           dataset is out of cache (step 3). The 500 message tells the caller
+           exactly what happened so they can take remedial action.
+
+    Race condition (known, accepted):
+      Requests that completed reg.open() BEFORE step 3 and are currently
+      executing read_window() may receive a zarr FileNotFoundError when
+      rmtree (step 5) removes chunk files mid-read. This manifests as HTTP 500
+      on the concurrent reader, not HTTP 404. This race requires two concurrent
+      requests on the same dataset_id and is accepted for single-client
+      deployments (arro-memory). For multi-client deployments, a per-dataset
+      reader-writer lock is required. See TODO(issue-22-rwlock) in registry.py.
+
+    Path traversal:
+      dataset_id is URL-decoded by FastAPI. A value like '../../etc/passwd'
+      is rejected at step 2 via Path.resolve() + relative_to() check.
+
+    Response:
+      {"id": dataset_id, "deleted": true, "index_deleted": bool}
+      index_deleted is True if an ArrowSpace index was found and removed.
+
+    Returns:
+        dict with id, deleted=True, index_deleted bool.
+
+    Raises:
+        HTTPException(404): dataset not found.
+        HTTPException(403): dataset path is outside all configured data roots.
+        HTTPException(500): filesystem removal failed (index already deleted).
+    """
+    import shutil
+
+    from ..errors import DatasetNotFound
+
+    # Step 1 — resolve path; raises DatasetNotFound if not found
+    try:
+        h = reg.open(dataset_id)
+    except DatasetNotFound:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Dataset '{dataset_id}' not found.",
+        ) from None
+
+    fs_path: Path = h.fs_path  # always set by _ZarrArrayHandle.__init__
+
+    # Step 2 — path traversal guard
+    _assert_dataset_path_within_roots(fs_path, settings.resolved_roots)
+
+    # Step 3 — evict from registry cache before touching disk.
+    # After this call, new requests to reg.open() will rescan the filesystem.
+    # If rmtree has not completed yet, they will still find the dataset on disk
+    # and serve it — this is correct (it exists). Once rmtree completes, they
+    # will not find it and return 404. Both outcomes are consistent.
+    reg.invalidate_dataset(dataset_id)
+
+    # Step 4 — delete index artefacts (idempotent: False if no index existed)
+    index_store = Path(settings.index_store).expanduser().resolve()
+    try:
+        index_deleted = adapter.delete_index(dataset_id=dataset_id, index_store=index_store)
+    except OptionalDependencyMissing:
+        # _SidecarAdapter raises when arrowspace package is not available.
+        # Treat as no index — still delete the dataset directory.
+        index_deleted = False
+
+    # Step 5 — delete the Zarr directory from disk
+    try:
+        shutil.rmtree(str(fs_path))
+    except FileNotFoundError:
+        # Already gone — treat as success (idempotent)
+        pass
+    except (OSError, PermissionError) as exc:
+        # The dataset is already out of the registry cache (step 3) and the
+        # index is already deleted (step 4). We cannot undo those operations.
+        # Return a 500 that clearly describes the partial state so the caller
+        # (arro-memory) knows to call POST /admin/reload and investigate the
+        # filesystem.
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"Index artefacts deleted and dataset evicted from registry, "
+                f"but filesystem removal of '{dataset_id}' failed: {exc}. "
+                f"The dataset is no longer indexed or listed, but its Zarr "
+                f"directory may still occupy disk space. "
+                f"Call POST /admin/reload after manual cleanup."
+            ),
+        ) from exc
+
+    return {"id": dataset_id, "deleted": True, "index_deleted": index_deleted}

@@ -137,6 +137,41 @@ class StorageRegistry:
         with self._lock:
             self._cache = None
 
+    def invalidate_dataset(self, dataset_id: str) -> None:
+        """Remove a single dataset from the in-process cache without triggering
+        a full O(N) filesystem rescan.
+
+        Design rationale (issue #22):
+        - Symmetric with register_dataset(): insert is O(1), delete must be O(1).
+        - Called by DELETE /api/datasets/{id} before shutil.rmtree so that new
+          requests arriving after this call will NOT find the dataset in cache
+          and will trigger a rescan — at which point the file will either still
+          exist (rmtree in progress → found → served until rmtree completes) or
+          be gone (rmtree complete → 404). Both outcomes are correct.
+
+        Race condition note:
+        - This does NOT protect requests that already completed reg.open() and
+          hold a live _ZarrArrayHandle._arr reference. Those requests may receive
+          a zarr FileNotFoundError if rmtree completes while read_window() is
+          executing. This is a known residual race, acceptable for single-client
+          deployments. See TODO(issue-22-rwlock) below.
+
+        Thread safety: acquires _lock (RLock). Safe to call concurrently.
+
+        TODO(issue-22-rwlock): for multi-client deployments, replace this with
+        a per-dataset reader-writer lock so that delete blocks until all active
+        readers complete. Options:
+          - threading.Condition (stdlib, zero deps)
+          - readerwriterlock library (lightweight)
+        The interface of this method does not change when the lock is added.
+
+        Args:
+            dataset_id: The dataset ID to evict from cache.
+        """
+        with self._lock:
+            if self._cache is not None:
+                self._cache.pop(dataset_id, None)
+
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
