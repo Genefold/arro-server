@@ -115,15 +115,20 @@ class UploadInitRequest(BaseModel):
 
     Attributes:
         dataset_id: URL-safe dataset ID in the form ``<root>--<path>``.
-                    E.g. ``"main--my_embeddings"``.
+                    E.g. ``"main--my_embeddings"`` or ``"uploads--my_embeddings"``.
+                    Must contain exactly one ``--`` separator.
                     Must not contain path separators (``/``, ``\\``).
         root:       Root label that must exist in ARRO_SERVER_DATA_ROOTS.
-                    E.g. ``"main"``.
+                    E.g. ``"main"`` or ``"uploads"``.
     """
 
     dataset_id: str = Field(
         ...,
-        description="URL-safe dataset ID, e.g. 'main--my_embeddings'.",
+        description=(
+            "URL-safe dataset ID in the form '<root>--<name>', "
+            "e.g. 'uploads--my_embeddings'. "
+            "The prefix before '--' must match the 'root' field."
+        ),
         min_length=1,
         max_length=256,
         pattern=r"^[A-Za-z0-9_\-]+$",
@@ -135,6 +140,29 @@ class UploadInitRequest(BaseModel):
         max_length=64,
         pattern=r"^[A-Za-z0-9_\-]+$",
     )
+
+    @model_validator(mode="after")
+    def _validate_dataset_id_format(self) -> "UploadInitRequest":
+        """Raise a clear 422 if dataset_id is missing the '--' root separator.
+
+        Routes.py calls decode_dataset_id() which splits on '--' and returns
+        a (label, rel) tuple.  Without '--' the split produces label == full
+        id and rel == '', causing a cryptic 400 deep in the route handler.
+        Catching this early produces a human-readable 422 with an example.
+        """
+        if "--" not in self.dataset_id:
+            raise ValueError(
+                f"dataset_id '{self.dataset_id}' is missing the '--' root separator. "
+                f"Use the form '<root>--<name>', e.g. '{self.root}--{self.dataset_id}'."
+            )
+        label = self.dataset_id.split("--", 1)[0]
+        if label != self.root:
+            raise ValueError(
+                f"dataset_id prefix '{label}' does not match root '{self.root}'. "
+                f"dataset_id must start with '{self.root}--', "
+                f"e.g. '{self.root}--my_embeddings'."
+            )
+        return self
 
 
 class UploadInitResponse(BaseModel):

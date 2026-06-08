@@ -3,6 +3,13 @@
 #
 # WARNING: ARRO_SERVER_CORS_ORIGINS is set to "*" here for local development
 # convenience. Do NOT use "*" in production — set it to your actual origin(s).
+#
+# Volume layout
+# -------------
+#   main     → read-only static/pre-built Zarr datasets (DATA_DIR on host)
+#   uploads  → read-write root for two-phase upload (UPLOAD_DIR on host)
+#              clients call POST /upload/init with root="uploads", write the
+#              Zarr to upload_path, then POST /upload/commit.
 
 services:
   arro-server:
@@ -10,21 +17,31 @@ services:
       context: .
       dockerfile: Containerfile
       args:
-        INSTALL_ARROW: "0"
-        INSTALL_ARROWSPACE: "0"
+        # Set to "1" to install pyarrow (Arrow IPC serialisation support)
+        INSTALL_ARROW: "1"
+        # Set to "1" to install arrowspace (spectral index + vector search).
+        # Required for POST /datasets/{id}/index and all /search/* endpoints.
+        INSTALL_ARROWSPACE: "1"
     image: arro-server:dev
     container_name: arro-server
     ports:
       - "8000:8000"
     environment:
-      ARRO_SERVER_DATA_ROOTS: "main=/data"
+      # Two named roots:
+      #   main    = read-only pre-built datasets
+      #   uploads = read-write destination for two-phase upload flow
+      ARRO_SERVER_DATA_ROOTS: "main=/data,uploads=/uploads"
       ARRO_SERVER_CORS_ORIGINS: "*"
       ARRO_SERVER_DEFAULT_WINDOW: "100"
       # Phase 2: point index store at the named volume mount
       ARRO_SERVER_INDEX_STORE: "/app/arrowspace_index"
     volumes:
+      # Static data — read-only.
       # Override on the CLI: DATA_DIR=/path/to/zarr docker compose up
       - "${DATA_DIR:-./example_data}:/data:ro,Z"
+      # Upload destination — read-write so /upload/init + /upload/commit work.
+      # Override on the CLI: UPLOAD_DIR=/path/to/uploads docker compose up
+      - "${UPLOAD_DIR:-./uploads}:/uploads:rw,Z"
       # Phase 2: persistent volume for ArrowSpace Parquet index files
       - "arrow_index_store:/app/arrowspace_index"
     restart: unless-stopped
