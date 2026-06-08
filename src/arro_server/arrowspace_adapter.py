@@ -25,10 +25,10 @@ ArrowSpace object public surface::
     aspace.search_linear_sorted(vec, gl, k) -> List[(int, float)]
     aspace.get_item(i)     -> item at position i
     aspace.get_all_items() -> all items
-    aspace.spot_motives_eigen()    -> List[(int, float)]
-    aspace.spot_motives_energy()   -> List[(int, float)]
-    aspace.spot_subg_centroids()   -> List[(int, float)]
-    aspace.spot_subg_motives()     -> List[(int, float)]
+    aspace.spot_motives_eigen(gl, cfg)    -> List[(int, float)]
+    aspace.spot_motives_energy(gl, cfg)   -> List[(int, float)]
+    aspace.spot_subg_centroids(gl, cfg)   -> List[(int, float)]
+    aspace.spot_subg_motives(gl, cfg)     -> List[(int, float)]
 
 GraphLaplacian object public surface::
 
@@ -879,28 +879,28 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
         entry = self._get_entry(dataset_id)
         return {
             "method": "spot_motives_eigen",
-            "results": self._spot_hits(entry.aspace.spot_motives_eigen()),
+            "results": self._spot_hits(entry.aspace.spot_motives_eigen(entry.gl, {})),
         }
 
     def spot_motives_energy(self, dataset_id: str) -> dict[str, Any]:
         entry = self._get_entry(dataset_id)
         return {
             "method": "spot_motives_energy",
-            "results": self._spot_hits(entry.aspace.spot_motives_energy()),
+            "results": self._spot_hits(entry.aspace.spot_motives_energy(entry.gl, {})),
         }
 
     def spot_subg_centroids(self, dataset_id: str) -> dict[str, Any]:
         entry = self._get_entry(dataset_id)
         return {
             "method": "spot_subg_centroids",
-            "results": self._spot_hits(entry.aspace.spot_subg_centroids()),
+            "results": self._spot_hits(entry.aspace.spot_subg_centroids(entry.gl, {})),
         }
 
     def spot_subg_motives(self, dataset_id: str) -> dict[str, Any]:
         entry = self._get_entry(dataset_id)
         return {
             "method": "spot_subg_motives",
-            "results": self._spot_hits(entry.aspace.spot_subg_motives()),
+            "results": self._spot_hits(entry.aspace.spot_subg_motives(entry.gl, {})),
         }
 
     def graph_export(self, dataset_id: str, fmt: str) -> dict[str, Any]:

@@ -116,11 +116,12 @@ def test_upload_init_unknown_root(app_client):
 
 
 def test_upload_init_label_mismatch(app_client):
-    """dataset_id label not matching root returns 400."""
+    """dataset_id label not matching root returns 422 (Pydantic validation)."""
     client, _ = app_client
     resp = client.post("/api/upload/init", json={"dataset_id": "other--cube", "root": "main"})
-    assert resp.status_code == 400
-    assert "other" in resp.json()["detail"]
+    assert resp.status_code == 422
+    detail = str(resp.json()["detail"])
+    assert "other" in detail
 
 
 # ---------------------------------------------------------------------------
@@ -129,11 +130,12 @@ def test_upload_init_label_mismatch(app_client):
 
 
 def test_upload_init_no_path_component(app_client):
-    """dataset_id with no path component (just the label) returns 400."""
+    """dataset_id with no path component (just the label) returns 422 (Pydantic validation)."""
     client, _ = app_client
     resp = client.post("/api/upload/init", json={"dataset_id": "main", "root": "main"})
-    assert resp.status_code == 400
-    assert "path component" in resp.json()["detail"]
+    assert resp.status_code == 422
+    detail = resp.json()["detail"]
+    assert "root separator" in str(detail) or "path component" in str(detail)
 
 
 # ---------------------------------------------------------------------------

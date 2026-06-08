@@ -78,15 +78,12 @@ class StorageRegistry:
 
         Raises DatasetNotFound if no backend recognises dataset_id.
         """
-        errors: list[str] = []
         for b in self._backends:
             try:
                 return b.open(dataset_id)
-            except DatasetNotFound as e:
-                errors.append(str(e.detail))
+            except DatasetNotFound:
                 continue
-        detail = " | ".join(errors) if errors else dataset_id
-        raise DatasetNotFound(detail)
+        raise DatasetNotFound(dataset_id)
 
     # ------------------------------------------------------------------
     # Cache management
