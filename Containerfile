@@ -11,6 +11,23 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
+# Install C build toolchain + Rust (required by arrowspace/maturin and
+# transitive deps such as pytrec-eval-terrier that compile native extensions).
+# Rust is installed via rustup into /usr/local/rust so it is available to
+# all subsequent RUN steps (including the non-root appuser at runtime if
+# needed, though maturin only runs at build time).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        build-essential \
+        curl \
+        pkg-config \
+    && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+        | sh -s -- -y --no-modify-path --profile minimal \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV PATH="/root/.cargo/bin:${PATH}"
+
 # Install build prerequisites first to maximise layer reuse.
 COPY pyproject.toml README.md ./
 COPY src ./src
