@@ -46,7 +46,11 @@ RUN if [ "$INSTALL_ARROW" = "1" ]; then pip install ".[arrow]"; fi \
         echo "arrowspace not installable in this image; sidecar adapter will be used"; fi
 
 # Run as a non-root user for security.
-RUN adduser --disabled-password --gecos "" appuser
+# Create the index persistence directory before switching user so that
+# appuser owns it and _write_manifest / _persist_csr can write to it.
+RUN adduser --disabled-password --gecos "" appuser \
+    && mkdir -p /app/arrowspace_index \
+    && chown -R appuser:appuser /app/arrowspace_index
 USER appuser
 
 EXPOSE 8000
