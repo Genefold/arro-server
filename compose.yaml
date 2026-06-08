@@ -38,7 +38,7 @@ services:
     volumes:
       # Static data — read-only.
       # Override on the CLI: DATA_DIR=/path/to/zarr docker compose up
-      - "${DATA_DIR:-./example_data}:/data:ro,Z"
+      - "${DATA_DIR:-./example_data}:/data:rw,Z"
       # Upload destination — read-write so /upload/init + /upload/commit work.
       # Override on the CLI: UPLOAD_DIR=/path/to/uploads docker compose up
       - "${UPLOAD_DIR:-./uploads}:/uploads:rw,Z"

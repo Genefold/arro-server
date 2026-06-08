@@ -797,9 +797,11 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
                 detail=f"Item index {idx} out of range [0, {entry.nitems}).",
             )
         vec = entry.aspace.get_item(idx)
+        if isinstance(vec, tuple):
+            vec = vec[0] if len(vec) == 1 else next((e for e in vec if isinstance(e, np.ndarray)), vec)
         return {
             "item_index": idx,
-            "vector": [float(v) for v in vec],
+            "vector": np.asarray(vec).flatten().tolist(),
         }
 
     def get_all_items(self, dataset_id: str) -> dict[str, Any]:
@@ -807,7 +809,7 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
         items = entry.aspace.get_all_items()
         return {
             "nitems": entry.nitems,
-            "items": [[float(v) for v in row] for row in items],
+            "items": [np.asarray(row).flatten().tolist() if not isinstance(row, np.ndarray) else row.tolist() for row in items],
         }
 
     def search(self, dataset_id: str, query: dict[str, Any]) -> dict[str, Any]:

@@ -200,3 +200,7 @@ opencode.json
 .bootstrapignore 
 
 roadmap.md
+
+uploads/
+
+bug_report.md
