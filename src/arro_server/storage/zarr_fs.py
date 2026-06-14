@@ -365,14 +365,33 @@ class ZarrFilesystemBackend:
                 f"dataset has {expected_d}"
             )
         if vecs.dtype != arr.dtype:
-            raise VectorDtypeMismatch(
-                f"dtype mismatch for '{dataset_id}': "
-                f"vectors are {vecs.dtype}, dataset is {arr.dtype}"
-            )
+            if np.can_cast(vecs.dtype, arr.dtype, casting="same_kind"):
+                vecs = vecs.astype(arr.dtype)
+            else:
+                raise VectorDtypeMismatch(
+                    f"dtype mismatch for '{dataset_id}': "
+                    f"vectors are {vecs.dtype}, dataset expects {arr.dtype}. "
+                    f"Use body.dtype='{arr.dtype}' in the request, or pass "
+                    f"vectors already cast to {arr.dtype}."
+                )
 
         # Write phase inside the per-dataset lock.
         with self._get_write_lock(dataset_id):
             arr = zarr.open(str(fs_path), mode="r+")
+            if not isinstance(arr, zarr.Array):
+                raise DatasetNotFound(f"{dataset_id} is a group, not an array")
+            # Re-validate inside the lock: the array may have been replaced
+            # between the pre-lock validation and now (concurrent delete+upload).
+            if arr.ndim != 2 or arr.shape[1] != vecs.shape[1]:
+                raise VectorShapeMismatch(
+                    f"Dataset '{dataset_id}' shape changed between validation and write: "
+                    f"expected D={vecs.shape[1]}, found {arr.shape}"
+                )
+            if vecs.dtype != arr.dtype:
+                raise VectorDtypeMismatch(
+                    f"Dataset '{dataset_id}' dtype changed between validation and write: "
+                    f"expected {vecs.dtype}, found {arr.dtype}"
+                )
             old_n = int(arr.shape[0])
             M = int(vecs.shape[0])
             D = int(arr.shape[1])

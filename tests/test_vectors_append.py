@@ -9,11 +9,16 @@ Test inventory:
     4.  test_append_dim_mismatch_422                — wrong feature dimension → 422
     5.  test_append_empty_vectors_422               — zero vectors (M=0) → 422
     6.  test_append_wrong_ndim_422                  — 1-D input → 422
-    7.  test_append_dtype_mismatch_422              — incompatible dtype → 422
+    7.  test_append_dtype_mismatch_422              — incompatible dtype (not same_kind) → 422
     8.  test_append_dataset_not_found_404           — non-existent dataset_id → 404
     9.  test_append_concurrent_start_rows_no_overlap — 3 threads, ranges are disjoint & contiguous
     10. test_append_data_readable_after_append      — GET /data returns just-appended vectors
     11. test_append_does_not_read_existing_vectors  — monkey-patch to verify O(M) not O(N)
+    12. test_append_float64_to_float32_auto_cast    — float64 vecs auto-cast to float32 dataset
+    13. test_append_int32_to_float64_same_kind      — int32 vecs auto-cast to float64 dataset
+    14. test_get_zarr_backend_valid                 — get_zarr_backend with valid label
+    15. test_get_zarr_backend_invalid               — get_zarr_backend with unknown label → None
+    16. test_append_toctou_shape_change_422         — mock zarr.open to trigger TOCTOU → 422
 
 Thread-safety:
     test_append_concurrent_start_rows_no_overlap is the most important correctness
@@ -54,6 +59,42 @@ def app_client(tmp_path: Path):
     zarr_dir = tmp_path / "matrix"
     arr = zarr.open(str(zarr_dir), mode="w", shape=(50, 4), chunks=(10, 4), dtype="float32")
     arr[:] = np.arange(50 * 4, dtype="float32").reshape(50, 4)
+
+    os.environ["ARRO_SERVER_DATA_ROOTS"] = f"main={tmp_path}"
+    os.environ["ARRO_SERVER_SERVE_FRONTEND"] = "false"
+    settings_mod.reset_settings_cache()
+    registry_mod.get_registry.cache_clear()
+    reset_adapter_cache()
+
+    app = create_app()
+    with TestClient(app, raise_server_exceptions=False) as client:
+        yield client, tmp_path
+
+    from arro_server.storage import registry as registry_mod
+
+    os.environ.pop("ARRO_SERVER_DATA_ROOTS", None)
+    os.environ.pop("ARRO_SERVER_SERVE_FRONTEND", None)
+    settings_mod.reset_settings_cache()
+    registry_mod.get_registry.cache_clear()
+    reset_adapter_cache()
+
+
+@pytest.fixture()
+def float64_app_client(tmp_path: Path):
+    """TestClient with a single float64 2-D Zarr array at main--f64matrix.
+
+    The array has shape (30, 4), dtype float64.
+    """
+    import zarr
+
+    from arro_server import settings as settings_mod
+    from arro_server.app import create_app
+    from arro_server.arrowspace_adapter import reset_adapter_cache
+    from arro_server.storage import registry as registry_mod
+
+    zarr_dir = tmp_path / "f64matrix"
+    arr = zarr.open(str(zarr_dir), mode="w", shape=(30, 4), chunks=(10, 4), dtype="float64")
+    arr[:] = np.arange(120, dtype="float64").reshape(30, 4)
 
     os.environ["ARRO_SERVER_DATA_ROOTS"] = f"main={tmp_path}"
     os.environ["ARRO_SERVER_SERVE_FRONTEND"] = "false"
@@ -198,13 +239,13 @@ def test_append_wrong_ndim_422(app_client):
 
 
 def test_append_dtype_mismatch_422(app_client):
-    """Vectors with wrong dtype return 422."""
+    """Vectors with incompatible dtype (not same_kind) return 422."""
     client, _ = app_client
     vectors = [[float(i) for i in range(4)] for _ in range(2)]
-    # Dataset is float32, request says float64 (explicit mismatch)
+    # Dataset is float32; complex64 is not same_kind → rejected
     resp = client.post(
         "/api/datasets/main--matrix/vectors/append",
-        json={"vectors": vectors, "dtype": "int32"},
+        json={"vectors": vectors, "dtype": "complex64"},
     )
     assert resp.status_code == 422
     assert "dtype mismatch" in resp.json()["detail"].lower()
@@ -357,3 +398,132 @@ def test_append_does_not_read_existing_vectors(app_client):
     # Verify the append did complete
     meta = client.get("/api/datasets/main--matrix/metadata").json()
     assert meta["shape"] == [52, 4]
+
+
+# ---------------------------------------------------------------------------
+# 12. Auto-cast float64 → float32 (same_kind)
+# ---------------------------------------------------------------------------
+
+
+def test_append_float64_to_float32_auto_cast(app_client):
+    """float64 vectors are auto-cast to float32 when dataset is float32."""
+    client, _ = app_client
+    # Vectors are float64 (Python float default), dataset is float32
+    # No explicit dtype in request — route handler defaults to float64
+    vectors = [[float(200 + i * 4 + j) for j in range(4)] for i in range(2)]
+    resp = client.post(
+        "/api/datasets/main--matrix/vectors/append",
+        json={"vectors": vectors},
+    )
+    assert resp.status_code == 200, resp.json()
+    body = resp.json()
+    assert body["start_row"] == 50
+    assert body["appended"] == 2
+    assert body["new_shape"] == [52, 4]
+
+    # Verify data was written correctly (float64 → float32 cast preserves
+    # values in this range since 200 < 2^24 mantissa).
+    slice_resp = client.get(
+        "/api/datasets/main--matrix/slice",
+        params={"slice": "50:52"},
+    )
+    assert slice_resp.status_code == 200
+    data = slice_resp.json()["data"]
+    assert data["dtype"] == "float32"
+    # Values should be approximately correct
+    for i, row in enumerate(data["rows"]):
+        expected = [float(200 + i * 4 + j) for j in range(4)]
+        for got, exp in zip(row, expected, strict=False):
+            assert abs(got - exp) < 1e-6
+
+
+# ---------------------------------------------------------------------------
+# 13. Auto-cast int32 → float64 (same_kind)
+# ---------------------------------------------------------------------------
+
+
+def test_append_int32_to_float64_same_kind(float64_app_client):
+    """int32 vectors are auto-cast to float64 when dataset is float64."""
+    client, _ = float64_app_client
+    vectors = [[float(i) for i in range(4)] for _ in range(3)]
+    resp = client.post(
+        "/api/datasets/main--f64matrix/vectors/append",
+        json={"vectors": vectors, "dtype": "int32"},
+    )
+    assert resp.status_code == 200, resp.json()
+    body = resp.json()
+    assert body["start_row"] == 30
+    assert body["appended"] == 3
+    assert body["new_shape"] == [33, 4]
+
+
+# ---------------------------------------------------------------------------
+# 14. get_zarr_backend — valid label
+# ---------------------------------------------------------------------------
+
+
+def test_get_zarr_backend_valid(app_client):
+    """get_zarr_backend with a known label returns ZarrFilesystemBackend."""
+    from arro_server.storage import registry as registry_mod
+    from arro_server.storage.zarr_fs import ZarrFilesystemBackend
+
+    reg = registry_mod.get_registry()
+    backend = reg.get_zarr_backend("main")
+    assert backend is not None
+    assert isinstance(backend, ZarrFilesystemBackend)
+
+
+# ---------------------------------------------------------------------------
+# 15. get_zarr_backend — invalid label
+# ---------------------------------------------------------------------------
+
+
+def test_get_zarr_backend_invalid(app_client):
+    """get_zarr_backend with an unknown label returns None."""
+    from arro_server.storage import registry as registry_mod
+
+    reg = registry_mod.get_registry()
+    backend = reg.get_zarr_backend("nonexistent_label")
+    assert backend is None
+
+
+# ---------------------------------------------------------------------------
+# 16. TOCTOU — shape change between validation and write
+# ---------------------------------------------------------------------------
+
+
+def test_append_toctou_shape_change_422(app_client):
+    """If the Zarr array shape changed between validation and write, VectorShapeMismatch."""
+    import zarr
+
+    from arro_server.settings import get_settings
+    from arro_server.storage import registry as registry_mod
+    from arro_server.storage.zarr_fs import ZarrFilesystemBackend
+
+    _, base_path = app_client
+    _ = base_path
+
+    settings = get_settings()
+    backend = ZarrFilesystemBackend(settings.resolved_roots)
+    reg = registry_mod.get_registry()
+
+    vecs = np.full((2, 4), 42.0, dtype="float32")
+
+    from unittest.mock import MagicMock
+
+    original_open = zarr.open
+
+    def _bait_and_switch(path, mode="r", **kw):
+        arr = original_open(path, mode=mode, **kw)
+        if mode == "r+":
+            mock_arr = MagicMock(spec=zarr.Array)
+            mock_arr.ndim = 2
+            mock_arr.shape = (50, 7)
+            mock_arr.dtype = arr.dtype
+            return mock_arr
+        return arr
+
+    with patch("zarr.open", _bait_and_switch):
+        with pytest.raises(Exception) as exc_info:
+            backend.append_vectors("main--matrix", vecs, registry=reg)
+        assert "shape changed" in str(exc_info.value).lower()

@@ -402,14 +402,8 @@ def vectors_append(
 
     from ..storage.base import decode_dataset_id
 
-    # Find the backend that owns this dataset label.
     label, _ = decode_dataset_id(dataset_id)
-    zarr_backend = None
-    for b in reg._backends:
-        roots = getattr(b, "_roots", None)
-        if roots is not None and label in roots:
-            zarr_backend = b
-            break
+    zarr_backend = reg.get_zarr_backend(label)
     if zarr_backend is None:
         raise HTTPException(
             status_code=404,
