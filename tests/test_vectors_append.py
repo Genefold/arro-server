@@ -15,7 +15,9 @@ Test inventory:
     10. test_append_data_readable_after_append      — GET /data returns just-appended vectors
     11. test_append_does_not_read_existing_vectors  — monkey-patch to verify O(M) not O(N)
     12. test_append_float64_to_float32_auto_cast    — float64 vecs auto-cast to float32 dataset
-    13. test_append_int32_to_float64_same_kind      — int32 vecs auto-cast to float64 dataset
+     13. test_append_float32_to_float64_auto_cast    — float32 vecs auto-cast to float64 dataset (same_kind)
+     17. test_append_complex64_to_float64_rejected_422 — complex64 → float64 is NOT same_kind → 422
+     18. test_append_toctou_dtype_change_422         — mock zarr.open to trigger TOCTOU dtype → 422
     14. test_get_zarr_backend_valid                 — get_zarr_backend with valid label
     15. test_get_zarr_backend_invalid               — get_zarr_backend with unknown label → None
     16. test_append_toctou_shape_change_422         — mock zarr.open to trigger TOCTOU → 422
@@ -438,23 +440,41 @@ def test_append_float64_to_float32_auto_cast(app_client):
 
 
 # ---------------------------------------------------------------------------
-# 13. Auto-cast int32 → float64 (same_kind)
+# 13. Auto-cast float32 → float64 (same_kind)
 # ---------------------------------------------------------------------------
 
 
-def test_append_int32_to_float64_same_kind(float64_app_client):
-    """int32 vectors are auto-cast to float64 when dataset is float64."""
+def test_append_float32_to_float64_auto_cast(float64_app_client):
+    """float32 vectors are auto-cast to float64 when dataset is float64 (same_kind)."""
     client, _ = float64_app_client
     vectors = [[float(i) for i in range(4)] for _ in range(3)]
     resp = client.post(
         "/api/datasets/main--f64matrix/vectors/append",
-        json={"vectors": vectors, "dtype": "int32"},
+        json={"vectors": vectors, "dtype": "float32"},
     )
     assert resp.status_code == 200, resp.json()
     body = resp.json()
     assert body["start_row"] == 30
     assert body["appended"] == 3
     assert body["new_shape"] == [33, 4]
+
+
+# ---------------------------------------------------------------------------
+# 17. complex64 → float64 rejected (not same_kind)
+# ---------------------------------------------------------------------------
+
+
+def test_append_complex64_to_float64_rejected_422(float64_app_client):
+    """complex64 → float64 is NOT same_kind: must return 422."""
+    client, _ = float64_app_client
+    vectors = [[float(i) for i in range(4)] for _ in range(2)]
+    resp = client.post(
+        "/api/datasets/main--f64matrix/vectors/append",
+        json={"vectors": vectors, "dtype": "complex64"},
+    )
+    assert resp.status_code == 422
+    assert "dtype mismatch" in resp.json()["detail"].lower()
+    assert "float64" in resp.json()["detail"]
 
 
 # ---------------------------------------------------------------------------
@@ -494,6 +514,8 @@ def test_get_zarr_backend_invalid(app_client):
 
 def test_append_toctou_shape_change_422(app_client):
     """If the Zarr array shape changed between validation and write, VectorShapeMismatch."""
+    from unittest.mock import MagicMock
+
     import zarr
 
     from arro_server.settings import get_settings
@@ -508,8 +530,6 @@ def test_append_toctou_shape_change_422(app_client):
     reg = registry_mod.get_registry()
 
     vecs = np.full((2, 4), 42.0, dtype="float32")
-
-    from unittest.mock import MagicMock
 
     original_open = zarr.open
 
@@ -527,3 +547,46 @@ def test_append_toctou_shape_change_422(app_client):
         with pytest.raises(Exception) as exc_info:
             backend.append_vectors("main--matrix", vecs, registry=reg)
         assert "shape changed" in str(exc_info.value).lower()
+
+
+# ---------------------------------------------------------------------------
+# 18. TOCTOU — dtype change between validation and write
+# ---------------------------------------------------------------------------
+
+
+def test_append_toctou_dtype_change_422(app_client):
+    """If the Zarr array dtype changed between validation and write, VectorDtypeMismatch."""
+    from unittest.mock import MagicMock, patch
+
+    import zarr
+
+    from arro_server.settings import get_settings
+    from arro_server.storage import registry as registry_mod
+    from arro_server.storage.zarr_fs import ZarrFilesystemBackend
+
+    _, base_path = app_client
+    _ = base_path
+
+    settings = get_settings()
+    backend = ZarrFilesystemBackend(settings.resolved_roots)
+    reg = registry_mod.get_registry()
+
+    # vecs is float32 (matching the existing dataset), valid shape
+    vecs = np.full((2, 4), 42.0, dtype="float32")
+
+    original_open = zarr.open
+
+    def _bait_and_switch(path, mode="r", **kw):
+        arr = original_open(path, mode=mode, **kw)
+        if mode == "r+":
+            mock_arr = MagicMock(spec=zarr.Array)
+            mock_arr.ndim = 2
+            mock_arr.shape = (50, 4)            # shape corretta — non triggera shape error
+            mock_arr.dtype = np.dtype("float64")  # dtype cambiato — triggera dtype error
+            return mock_arr
+        return arr
+
+    with patch("zarr.open", _bait_and_switch):
+        with pytest.raises(Exception) as exc_info:
+            backend.append_vectors("main--matrix", vecs, registry=reg)
+        assert "dtype changed" in str(exc_info.value).lower()
