@@ -93,17 +93,42 @@ def test_count_warm_cache(app_client):
 
 
 def test_count_cold_cache(app_client):
-    """If cache is invalidated, the endpoint triggers a full rescan and succeeds."""
+    """If cache is invalidated, the endpoint triggers a full rescan and succeeds.
+
+    Verifies three properties explicitly:
+    1.  After invalidate(), registry._cache is None (cache is actually cold).
+    2.  The endpoint returns 200 with correct nrows/ncols despite cold cache.
+    3.  After the request, registry._cache is not None (lazy load actually fired).
+
+    Without assertion (3), this test would pass even if _ensure_loaded() were
+    broken and the route somehow returned a stale value from another source.
+    Without assertion (1), invalidate() could silently be a no-op and the test
+    would still pass because the cache was already warm.
+    """
     client, _ = app_client
     from arro_server.storage.registry import get_registry
 
-    get_registry().invalidate()
+    registry = get_registry()
+    registry.invalidate()
+
+    # Guard: confirm cache is actually cold before issuing the request.
+    assert registry._cache is None, (
+        "Cache must be None immediately after invalidate(). "
+        "If this fails, the fixture teardown from a previous test left the "
+        "cache warm — check get_registry.cache_clear() in teardown."
+    )
 
     resp = client.get("/api/datasets/main--counter/vectors/count")
     assert resp.status_code == 200, resp.json()
     body = resp.json()
     assert body["nrows"] == 50
     assert body["ncols"] == 8
+
+    # Guard: confirm lazy load actually fired during the request.
+    assert registry._cache is not None, (
+        "Cache must be warm after a successful /vectors/count request. "
+        "If this fails, _ensure_loaded() was not called inside get_dataset()."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -149,26 +174,67 @@ def test_count_after_append(app_client):
 
 
 def test_count_after_overwrite(app_client):
-    """After overwriting K rows, nrows stays the same (shape unchanged)."""
-    client, _ = app_client
+    """After overwriting K rows, nrows stays the same (shape unchanged).
 
-    before = client.get("/api/datasets/main--counter/vectors/count").json()
-    assert before["nrows"] == 50
+    Verifies two independent properties:
+
+    1.  HTTP layer: GET /vectors/count returns nrows=50 before and after
+        the overwrite — shape is unchanged.
+
+    2.  Registry layer: the DatasetSummary object in the cache is the SAME
+        object (identity check via `is`) before and after the overwrite.
+        DatasetSummary is a frozen dataclass — register_dataset() always
+        creates a new instance. If overwrite_vectors incorrectly called
+        register_dataset(), a new object would be inserted into _cache even
+        with identical shape values, causing this assertion to fail.
+
+    This test catches a regression where overwrite_vectors erroneously calls
+    register_dataset() — something that a pure value-equality check (==)
+    would miss entirely.
+    """
+    client, _ = app_client
+    from arro_server.storage.registry import get_registry
+
+    # --- Baseline -----------------------------------------------------------
+
+    before_http = client.get("/api/datasets/main--counter/vectors/count").json()
+    assert before_http["nrows"] == 50
+    assert before_http["ncols"] == 8
+
+    # Snapshot the exact DatasetSummary object currently in the cache.
+    before_summary = get_registry().get_dataset("main--counter")
+    assert before_summary is not None
+    assert before_summary.shape == (50, 8)
+
+    # --- Overwrite ----------------------------------------------------------
 
     overwrite_resp = client.post(
         "/api/datasets/main--counter/vectors/overwrite",
         json={
             "updates": [
-                {"row_index": 0, "vector": [9.0] * 8},
+                {"row_index": 0,  "vector": [9.0] * 8},
                 {"row_index": 49, "vector": [7.0] * 8},
             ]
         },
     )
     assert overwrite_resp.status_code == 200, overwrite_resp.json()
 
-    after = client.get("/api/datasets/main--counter/vectors/count").json()
-    assert after["nrows"] == 50
-    assert after["ncols"] == 8
+    # --- Assertions ---------------------------------------------------------
+
+    # HTTP layer: nrows and ncols unchanged.
+    after_http = client.get("/api/datasets/main--counter/vectors/count").json()
+    assert after_http["nrows"] == 50
+    assert after_http["ncols"] == 8
+
+    # Registry layer: same object — overwrite must NOT have replaced the
+    # cache entry. register_dataset() creates a new DatasetSummary instance,
+    # so identity divergence is an unambiguous signal of a regression.
+    after_summary = get_registry().get_dataset("main--counter")
+    assert after_summary is before_summary, (
+        "overwrite_vectors must not replace the registry cache entry. "
+        "register_dataset() should not be called after an in-place row write. "
+        f"before id={id(before_summary)}, after id={id(after_summary)}"
+    )
 
 
 # ---------------------------------------------------------------------------
