@@ -197,6 +197,38 @@ class StorageRegistry:
                     return b
         return None
 
+    def get_dataset(self, dataset_id: str) -> DatasetSummary | None:
+        """Return the cached DatasetSummary for *dataset_id*, or None if not found.
+
+        Performs an O(1) dict lookup when the cache is warm.  If the cache is
+        cold (None — first call after startup or after invalidate()), triggers
+        a full O(N·D) lazy load via _ensure_loaded() before the lookup, exactly
+        as list_datasets() does.
+
+        Concurrency guarantee
+        ---------------------
+        Both _ensure_loaded() and dict.get() execute inside the same _lock
+        acquisition, so no thread can call invalidate() between them.  The
+        returned DatasetSummary is a frozen dataclass — callers may read its
+        fields without holding the lock.
+
+        Staleness note
+        --------------
+        The returned value reflects the registry cache at the moment the lock
+        is released.  A concurrent append_vectors() that completes after this
+        call returns may produce a higher nrows value.  This is a known and
+        accepted snapshot semantic — see RC-1 in the design notes for issue #36.
+
+        Args:
+            dataset_id: URL-safe dataset ID (e.g. "main--matrix").
+
+        Returns:
+            DatasetSummary if dataset_id is in the cache, else None.
+        """
+        with self._lock:
+            self._ensure_loaded()
+            return self._cache.get(dataset_id)  # type: ignore[union-attr]
+
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
