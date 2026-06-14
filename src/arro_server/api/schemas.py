@@ -262,3 +262,20 @@ class VectorOverwriteResponse(BaseModel):
     """
 
     overwritten: int
+
+
+class VectorCountResponse(BaseModel):
+    """Response body for GET /api/datasets/{dataset_id}/vectors/count.
+
+    Reflects the StorageRegistry cache at the moment of the call.
+    See staleness note in StorageRegistry.get_dataset().
+
+    Attributes:
+        dataset_id: Echo of the requested dataset ID.
+        nrows:      Current row count (arr.shape[0]).
+        ncols:      Feature dimension (arr.shape[1]).
+    """
+
+    dataset_id: str
+    nrows: int
+    ncols: int
