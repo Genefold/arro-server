@@ -173,6 +173,31 @@ class StorageRegistry:
                 self._cache.pop(dataset_id, None)
 
     # ------------------------------------------------------------------
+    # Public helpers
+    # ------------------------------------------------------------------
+
+    def get_zarr_backend(self, label: str) -> ZarrFilesystemBackend | None:
+        """Return the ``ZarrFilesystemBackend`` that owns *label*, or ``None``.
+
+        Public interface for route handlers that need direct backend access
+        (e.g. ``vectors_append``).  Avoids exposing the ``_backends`` list
+        externally.
+
+        Args:
+            label: Root label (e.g. ``"main"``).
+
+        Returns:
+            The matching ``ZarrFilesystemBackend``, or ``None`` if no backend
+            owns *label*.
+        """
+        for b in self._backends:
+            if isinstance(b, ZarrFilesystemBackend):
+                roots: dict | None = getattr(b, "_roots", None)
+                if roots is not None and label in roots:
+                    return b
+        return None
+
+    # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
 

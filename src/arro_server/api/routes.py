@@ -33,6 +33,7 @@ GET  /api/datasets/{id}/graph?fmt=csr|dense                -- Laplacian matrix e
 GET  /api/datasets/{id}/spectral_metrics                   -- full spectral analytics
 POST /api/upload/init     -- validate dataset_id + root, return upload_path
 POST /api/upload/commit   -- register uploaded Zarr into StorageRegistry cache
+POST /api/datasets/{id}/vectors/append  -- append row-vectors to an existing dataset (O(M))
 POST /api/admin/reload                                     -- hot-reload StorageRegistry + ArrowSpaceAdapter cache
 """
 
@@ -62,6 +63,8 @@ from .schemas import (
     UploadCommitResponse,
     UploadInitRequest,
     UploadInitResponse,
+    VectorAppendRequest,
+    VectorAppendResponse,
 )
 from .serializers import array_to_payload
 
@@ -353,6 +356,70 @@ def upload_commit(
         dtype=s.dtype,
         chunks=list(s.chunks) if s.chunks else None,
         index_stale=index_stale,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Vectors write — append row-vectors to an existing dataset
+# ---------------------------------------------------------------------------
+#
+# IMPORTANT — route ordering: this POST sub-route MUST be registered before
+# any bare POST /datasets/{dataset_id:path} catch-all (if one is ever added).
+# FastAPI resolves `:path` routes in registration order (first match wins).
+# Currently no bare POST /datasets/{dataset_id:path} exists, but if one is
+# added in the future, register it AFTER this line.
+
+
+@router.post(
+    "/datasets/{dataset_id:path}/vectors/append",
+    response_model=VectorAppendResponse,
+    summary="Append vectors to an existing dataset",
+    description=(
+        "Appends M new row-vectors to dataset_id without reading or re-uploading "
+        "the existing N rows. Complexity: O(M·D). The response includes start_row "
+        "so callers can assign row indices to their document store."
+    ),
+)
+def vectors_append(
+    dataset_id: str,
+    body: VectorAppendRequest,
+    reg: StorageRegistry = Depends(_registry),
+) -> VectorAppendResponse:
+    """Append M new row-vectors to an existing 2-D Zarr array.
+
+    Validation sequence:
+        1. Resolve dataset_id to a backend (404 if no backend owns the label).
+        2. Convert request vectors to numpy array (422 if body is malformed).
+        3. ``backend.append_vectors()`` validates ndim, dims, dtype, and
+           M > 0 (422 if any check fails) then writes the new rows in O(M·D).
+        4. The registry cache is updated inside the per-dataset write lock
+           so that concurrent reads see the correct shape immediately.
+
+    Returns:
+        VectorAppendResponse with start_row, appended count, new_shape.
+    """
+    import numpy as np
+
+    from ..storage.base import decode_dataset_id
+
+    label, _ = decode_dataset_id(dataset_id)
+    zarr_backend = reg.get_zarr_backend(label)
+    if zarr_backend is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Dataset '{dataset_id}' not found.",
+        )
+
+    # Convert request body to numpy array with requested dtype (default float64).
+    dtype = body.dtype if body.dtype else "float64"
+    vecs = np.array(body.vectors, dtype=dtype)
+
+    start_row, new_n = zarr_backend.append_vectors(dataset_id, vecs, registry=reg)
+
+    return VectorAppendResponse(
+        start_row=start_row,
+        appended=int(vecs.shape[0]),
+        new_shape=[new_n, int(vecs.shape[1])],
     )
 
 
