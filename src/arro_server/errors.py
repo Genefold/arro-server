@@ -50,3 +50,17 @@ class OptionalDependencyMissing(Exception):
         )
         self.package = package
         self.feature = feature
+
+
+class VectorShapeMismatch(HTTPException):
+    """Raised when request vectors have wrong shape for the target dataset."""
+
+    def __init__(self, msg: str) -> None:
+        super().__init__(status_code=422, detail=msg)
+
+
+class VectorDtypeMismatch(HTTPException):
+    """Raised when request vectors have dtype incompatible with the target dataset."""
+
+    def __init__(self, msg: str) -> None:
+        super().__init__(status_code=422, detail=msg)

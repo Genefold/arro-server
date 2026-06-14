@@ -8,15 +8,19 @@ from __future__ import annotations
 
 import logging
 import math
+import threading
 from pathlib import Path
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 import numpy as np
 
 from ..api.serializers import deep_sanitize
-from ..errors import DatasetNotFound, OptionalDependencyMissing
+from ..errors import DatasetNotFound, OptionalDependencyMissing, VectorDtypeMismatch, VectorShapeMismatch
 from ..slicing import ResolvedSlice
 from .base import DatasetHandle, DatasetSummary, decode_dataset_id, make_dataset_id
+
+if TYPE_CHECKING:
+    from .registry import StorageRegistry
 
 log = logging.getLogger(__name__)
 
@@ -101,6 +105,8 @@ class ZarrFilesystemBackend:
 
     def __init__(self, roots: dict[str, Path]):
         self._roots = roots
+        self._write_locks: dict[str, threading.Lock] = {}
+        self._write_locks_mutex = threading.Lock()
 
     # ----- discovery ---------------------------------------------------
 
@@ -272,3 +278,107 @@ class ZarrFilesystemBackend:
             "order": getattr(arr, "order", None),
         }
         return _ZarrArrayHandle(summary=summary, metadata=metadata, arr=arr, fs_path=target)
+
+    # ----- write --------------------------------------------------------
+
+    def _get_write_lock(self, dataset_id: str) -> threading.Lock:
+        """Return (creating if necessary) the per-dataset write lock.
+
+        Two-phase commit operations (append, overwrite) on the same dataset
+        must be serialized so that resize + write + cache-update is atomic.
+        Datasets do not share locks — concurrent writes on different datasets
+        proceed in parallel.
+        """
+        with self._write_locks_mutex:
+            if dataset_id not in self._write_locks:
+                self._write_locks[dataset_id] = threading.Lock()
+            return self._write_locks[dataset_id]
+
+    def append_vectors(
+        self,
+        dataset_id: str,
+        vecs: np.ndarray,
+        registry: StorageRegistry | None = None,
+    ) -> tuple[int, int]:
+        """Append M new row-vectors to an existing 2-D Zarr array.
+
+        The array at dataset_id is opened in ``"r+"`` mode, resized to
+        accommodate the new rows, and the new vectors are written to the
+        newly allocated slice.
+
+        Complexity:
+            - Path resolution & open: O(1)  — single ``zarr.json`` read.
+            - Validation:             O(1)  — shape/dtype from metadata.
+            - Resize:                 O(1)  — Zarr v3 metadata-only.
+            - Write:                  O(M·D) — only the M new rows.
+            - Cache update:           O(1)  — ``register_dataset()``.
+
+        Args:
+            dataset_id: URL-safe dataset ID. Must exist and be a 2-D array.
+            vecs:       NumPy array of shape (M, D), M > 0. D and dtype must
+                        match the existing array.
+            registry:   Optional ``StorageRegistry``. If provided,
+                        ``register_dataset()`` is called inside the per-dataset
+                        write lock to update the cached shape before the lock
+                        is released.
+
+        Returns:
+            Tuple ``(start_row, new_nrows)`` where:
+              - ``start_row`` — row index of the first appended vector
+                (= old row count).
+              - ``new_nrows`` — total row count after append (= old_n + M).
+
+        Raises:
+            DatasetNotFound:       dataset_id does not resolve to an array.
+            VectorShapeMismatch:   vecs.ndim != 2, D mismatch, or M == 0.
+            VectorDtypeMismatch:   vecs.dtype incompatible with arr.dtype.
+            OptionalDependencyMissing: zarr package not installed.
+        """
+        _require_zarr()
+
+        label, rel = decode_dataset_id(dataset_id)
+        root = self._roots.get(label)
+        if root is None:
+            raise DatasetNotFound(dataset_id)
+        fs_path = root if rel in (".", "") else root / rel
+        if not fs_path.exists():
+            raise DatasetNotFound(dataset_id)
+
+        # Open once in "r" mode for validation (outside the write lock).
+        arr = zarr.open(str(fs_path), mode="r")
+        if not isinstance(arr, zarr.Array):
+            raise DatasetNotFound(f"{dataset_id} is a group, not an array")
+
+        if vecs.ndim != 2:
+            raise VectorShapeMismatch(
+                f"Expected 2-D array, got {vecs.ndim}D for '{dataset_id}'"
+            )
+        if vecs.shape[0] == 0:
+            raise VectorShapeMismatch(
+                f"Cannot append zero vectors to '{dataset_id}'"
+            )
+        expected_d = arr.shape[1]
+        if vecs.shape[1] != expected_d:
+            raise VectorShapeMismatch(
+                f"Dimension mismatch for '{dataset_id}': "
+                f"vectors have {vecs.shape[1]} features, "
+                f"dataset has {expected_d}"
+            )
+        if vecs.dtype != arr.dtype:
+            raise VectorDtypeMismatch(
+                f"dtype mismatch for '{dataset_id}': "
+                f"vectors are {vecs.dtype}, dataset is {arr.dtype}"
+            )
+
+        # Write phase inside the per-dataset lock.
+        with self._get_write_lock(dataset_id):
+            arr = zarr.open(str(fs_path), mode="r+")
+            old_n = int(arr.shape[0])
+            M = int(vecs.shape[0])
+            D = int(arr.shape[1])
+            new_n = old_n + M
+            arr.resize((new_n, D))
+            arr[old_n:new_n, :] = vecs
+            if registry is not None:
+                registry.register_dataset(dataset_id, fs_path)
+            return old_n, new_n

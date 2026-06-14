@@ -192,3 +192,31 @@ class UploadCommitResponse(BaseModel):
     dtype: str
     chunks: list[int] | None = None
     index_stale: bool = False
+
+
+class VectorAppendRequest(BaseModel):
+    """Request body for POST /api/datasets/{dataset_id}/vectors/append.
+
+    Attributes:
+        vectors: List of row-vectors, shape (M, D). M > 0. D must match
+                 the target dataset's feature dimension.
+        dtype:   Optional target dtype string (e.g. "float32"). If omitted
+                 the array's current dtype is used. A mismatch raises 422.
+    """
+
+    vectors: list[list[float]]
+    dtype: str | None = None
+
+
+class VectorAppendResponse(BaseModel):
+    """Response body for POST /api/datasets/{dataset_id}/vectors/append.
+
+    Attributes:
+        start_row:  Row index of the first appended vector (= old row count).
+        appended:   Number of vectors written (= len(request.vectors)).
+        new_shape:  Updated array shape [new_nrows, D].
+    """
+
+    start_row: int
+    appended: int
+    new_shape: list[int]
