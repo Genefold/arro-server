@@ -10,12 +10,17 @@ import logging
 import math
 import threading
 from pathlib import Path
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
 from ..api.serializers import deep_sanitize
-from ..errors import DatasetNotFound, OptionalDependencyMissing, VectorDtypeMismatch, VectorShapeMismatch
+from ..errors import (
+    DatasetNotFound,
+    OptionalDependencyMissing,
+    VectorDtypeMismatch,
+    VectorShapeMismatch,
+)
 from ..slicing import ResolvedSlice
 from .base import DatasetHandle, DatasetSummary, decode_dataset_id, make_dataset_id
 
@@ -401,3 +406,129 @@ class ZarrFilesystemBackend:
             if registry is not None:
                 registry.register_dataset(dataset_id, fs_path)
             return old_n, new_n
+
+    def overwrite_vectors(
+        self,
+        dataset_id: str,
+        updates: list,          # list[RowUpdate] — typed as list to avoid circular import
+        dtype: str = "float64",
+    ) -> int:
+        """Overwrite specific rows of an existing 2-D Zarr array in-place.
+
+        The array shape is unchanged — only the values at the given row
+        indices are replaced.  All validation is performed before any write
+        (validate-all-then-write): if any update is invalid, no row is written.
+
+        Complexity:
+            - Path resolution & open: O(1)  — single zarr.json read.
+            - Validation:             O(K)  — K = len(updates), bounds + dim check.
+            - dtype cast:             O(K·D) — cast batch array if needed.
+            - Write:                  O(K·D) — K individual row assignments.
+            - Cache update:           none   — shape is unchanged.
+
+        Duplicate row_index values in updates are permitted. The last entry
+        for a given index wins. No deduplication is performed.
+
+        NOTE — TOCTOU asymmetry: row_index bounds are validated against
+        arr.shape[0] outside the lock.  A concurrent append_vectors may
+        increase shape[0] between validation and the lock-acquire.  This is
+        safe: append only grows the array, so an index valid before the lock
+        remains valid inside.  If a future operation that truncates the array
+        is introduced, the re-validation inside the lock becomes critical.
+
+        Args:
+            dataset_id: URL-safe dataset ID. Must exist and be a 2-D array.
+            updates:    List of RowUpdate(row_index, vector). Non-empty.
+                        row_index >= 0 is guaranteed by Pydantic (Field ge=0).
+            dtype:      Target dtype string for the input vectors (default
+                        "float64"). same_kind cast is attempted if needed;
+                        VectorDtypeMismatch raised if incompatible.
+
+        Returns:
+            Number of rows written (= len(updates)).
+
+        Raises:
+            DatasetNotFound:           dataset_id does not resolve to an array.
+            VectorShapeMismatch:       any row_index out of bounds, or any
+                                       vector has wrong dimension D.
+            VectorDtypeMismatch:       dtype incompatible with arr.dtype (not
+                                       same_kind).
+            OptionalDependencyMissing: zarr package not installed.
+        """
+        _require_zarr()
+
+        label, rel = decode_dataset_id(dataset_id)
+        root = self._roots.get(label)
+        if root is None:
+            raise DatasetNotFound(dataset_id)
+        fs_path = root if rel in (".", "") else root / rel
+        if not fs_path.exists():
+            raise DatasetNotFound(dataset_id)
+
+        # --- Pre-lock validation (read-only, outside the write lock) ----------
+
+        arr = zarr.open(str(fs_path), mode="r")
+        if not isinstance(arr, zarr.Array):
+            raise DatasetNotFound(f"{dataset_id} is a group, not an array")
+        if arr.ndim != 2:
+            raise VectorShapeMismatch(
+                f"Dataset '{dataset_id}' is not 2-D (ndim={arr.ndim}). "
+                "overwrite_vectors requires a 2-D array."
+            )
+
+        N, D = int(arr.shape[0]), int(arr.shape[1])
+        arr_dtype = arr.dtype
+
+        # Validate ALL updates before any write (validate-all-then-write).
+        for i, upd in enumerate(updates):
+            if upd.row_index >= N:
+                raise VectorShapeMismatch(
+                    f"Row index out of bounds for '{dataset_id}': "
+                    f"updates[{i}].row_index={upd.row_index}, "
+                    f"array has {N} rows (valid range: 0..{N - 1})."
+                )
+            if len(upd.vector) != D:
+                raise VectorShapeMismatch(
+                    f"Dimension mismatch for '{dataset_id}': "
+                    f"updates[{i}].vector has {len(upd.vector)} features, "
+                    f"dataset has {D}."
+                )
+
+        # Build numpy batch array (K, D) and apply dtype cast if needed.
+        vecs = np.array([upd.vector for upd in updates], dtype=dtype)
+        if vecs.dtype != arr_dtype:
+            if np.can_cast(vecs.dtype, arr_dtype, casting="same_kind"):
+                vecs = vecs.astype(arr_dtype)
+            else:
+                raise VectorDtypeMismatch(
+                    f"dtype mismatch for '{dataset_id}': "
+                    f"vectors are {vecs.dtype}, dataset expects {arr_dtype}. "
+                    f"Use body.dtype='{arr_dtype}' in the request, or pass "
+                    f"vectors already cast to {arr_dtype}."
+                )
+
+        # --- Write phase (inside per-dataset lock) ----------------------------
+
+        with self._get_write_lock(dataset_id):
+            arr = zarr.open(str(fs_path), mode="r+")
+            if not isinstance(arr, zarr.Array):
+                raise DatasetNotFound(f"{dataset_id} is a group, not an array")
+            # TOCTOU guard: re-validate shape and dtype with fresh values.
+            # Shape can only have grown (append), never shrunk — bounds check
+            # remains valid. Dtype change would indicate a concurrent
+            # delete+upload, which would be a bug in the caller.
+            if arr.ndim != 2 or arr.shape[1] != D:
+                raise VectorShapeMismatch(
+                    f"Dataset '{dataset_id}' shape changed between validation and write: "
+                    f"expected D={D}, found {arr.shape}."
+                )
+            if arr.dtype != vecs.dtype:
+                raise VectorDtypeMismatch(
+                    f"Dataset '{dataset_id}' dtype changed between validation and write: "
+                    f"expected {vecs.dtype}, found {arr.dtype}."
+                )
+            for i, upd in enumerate(updates):
+                arr[upd.row_index] = vecs[i]
+
+        # Shape is unchanged — do NOT call registry.register_dataset().
+        return len(updates)

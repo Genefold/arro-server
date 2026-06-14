@@ -34,6 +34,7 @@ GET  /api/datasets/{id}/spectral_metrics                   -- full spectral anal
 POST /api/upload/init     -- validate dataset_id + root, return upload_path
 POST /api/upload/commit   -- register uploaded Zarr into StorageRegistry cache
 POST /api/datasets/{id}/vectors/append  -- append row-vectors to an existing dataset (O(M))
+POST /api/datasets/{id}/vectors/overwrite  -- in-place row update for changed documents (O(K·D))
 POST /api/admin/reload                                     -- hot-reload StorageRegistry + ArrowSpaceAdapter cache
 """
 
@@ -65,6 +66,8 @@ from .schemas import (
     UploadInitResponse,
     VectorAppendRequest,
     VectorAppendResponse,
+    VectorOverwriteRequest,
+    VectorOverwriteResponse,
 )
 from .serializers import array_to_payload
 
@@ -421,6 +424,64 @@ def vectors_append(
         appended=int(vecs.shape[0]),
         new_shape=[new_n, int(vecs.shape[1])],
     )
+
+
+# ---------------------------------------------------------------------------
+# Vectors write — overwrite specific rows of an existing dataset
+# ---------------------------------------------------------------------------
+#
+# IMPORTANT — route ordering: registered BEFORE any bare POST
+# /datasets/{dataset_id:path} catch-all (first-match wins in FastAPI).
+# Keep this block adjacent to vectors_append for the same reason.
+
+
+@router.post(
+    "/datasets/{dataset_id:path}/vectors/overwrite",
+    response_model=VectorOverwriteResponse,
+    summary="Overwrite specific rows of an existing dataset",
+    description=(
+        "Replaces the vectors at the given row indices in-place. "
+        "Array shape is unchanged. Complexity: O(K·D) where K = len(updates). "
+        "All validation is performed before any write — if any update is "
+        "invalid, no row is written. "
+        "If an ArrowSpace index exists for this dataset, it will be stale "
+        "after overwrite. Call POST /datasets/{id}/index to rebuild."
+    ),
+)
+def vectors_overwrite(
+    dataset_id: str,
+    body: VectorOverwriteRequest,
+    reg: StorageRegistry = Depends(_registry),
+) -> VectorOverwriteResponse:
+    """Overwrite specific rows of an existing 2-D Zarr array.
+
+    Validation sequence:
+        1. Resolve dataset_id to a ZarrFilesystemBackend (404 if not found).
+        2. ``backend.overwrite_vectors()`` validates all (row_index, vector)
+           pairs before any write (validate-all-then-write). Raises 422 if
+           any index is out of bounds, any vector has wrong dimension, or
+           dtype is incompatible.
+        3. Rows are written inside the per-dataset write lock.
+        4. Registry cache is NOT updated — shape is unchanged.
+
+    Note:
+        If an ArrowSpace index exists for this dataset, its in-memory
+        representation will not reflect the new vectors until the index
+        is rebuilt via POST /datasets/{id}/index.
+    """
+    from ..storage.base import decode_dataset_id
+
+    label, _ = decode_dataset_id(dataset_id)
+    zarr_backend = reg.get_zarr_backend(label)
+    if zarr_backend is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Dataset '{dataset_id}' not found.",
+        )
+
+    dtype = body.dtype or "float64"
+    overwritten = zarr_backend.overwrite_vectors(dataset_id, body.updates, dtype=dtype)
+    return VectorOverwriteResponse(overwritten=overwritten)
 
 
 # ---------------------------------------------------------------------------

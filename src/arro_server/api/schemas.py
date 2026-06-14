@@ -220,3 +220,45 @@ class VectorAppendResponse(BaseModel):
     start_row: int
     appended: int
     new_shape: list[int]
+
+
+class RowUpdate(BaseModel):
+    """A single row-overwrite instruction.
+
+    Attributes:
+        row_index: Zero-based row index to overwrite. Must be >= 0.
+                   Out-of-bounds against the array's current shape is
+                   validated by the backend (VectorShapeMismatch → 422).
+        vector:    Replacement vector. Length must equal the dataset's
+                   feature dimension D.
+    """
+
+    row_index: int = Field(..., ge=0)
+    vector: list[float]
+
+
+class VectorOverwriteRequest(BaseModel):
+    """Request body for POST /api/datasets/{dataset_id}/vectors/overwrite.
+
+    Attributes:
+        updates: List of (row_index, vector) pairs. Must be non-empty.
+                 Duplicate row_index values are permitted — the last entry
+                 for a given index wins. No deduplication is performed.
+        dtype:   Optional target dtype string (e.g. "float32"). If omitted,
+                 defaults to "float64" at the route level. A same_kind cast
+                 is attempted; incompatible dtype raises 422.
+    """
+
+    updates: list[RowUpdate] = Field(..., min_length=1)
+    dtype: str | None = None
+
+
+class VectorOverwriteResponse(BaseModel):
+    """Response body for POST /api/datasets/{dataset_id}/vectors/overwrite.
+
+    Attributes:
+        overwritten: Number of rows written (= len(request.updates)).
+                     Shape of the array is unchanged.
+    """
+
+    overwritten: int
