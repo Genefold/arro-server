@@ -35,6 +35,7 @@ POST /api/upload/init     -- validate dataset_id + root, return upload_path
 POST /api/upload/commit   -- register uploaded Zarr into StorageRegistry cache
 POST /api/datasets/{id}/vectors/append  -- append row-vectors to an existing dataset (O(M))
 POST /api/datasets/{id}/vectors/overwrite  -- in-place row update for changed documents (O(K·D))
+GET  /api/datasets/{id}/vectors/count     -- O(1) row/col count from registry cache
 POST /api/admin/reload                                     -- hot-reload StorageRegistry + ArrowSpaceAdapter cache
 """
 
@@ -66,6 +67,7 @@ from .schemas import (
     UploadInitResponse,
     VectorAppendRequest,
     VectorAppendResponse,
+    VectorCountResponse,
     VectorOverwriteRequest,
     VectorOverwriteResponse,
 )
@@ -482,6 +484,73 @@ def vectors_overwrite(
     dtype = body.dtype or "float64"
     overwritten = zarr_backend.overwrite_vectors(dataset_id, body.updates, dtype=dtype)
     return VectorOverwriteResponse(overwritten=overwritten)
+
+
+# ---------------------------------------------------------------------------
+# Vectors read — lightweight row/column count from registry cache
+# ---------------------------------------------------------------------------
+#
+# IMPORTANT — route ordering: registered BEFORE any bare GET
+# /datasets/{dataset_id:path} catch-all (first-match wins in FastAPI).
+# Keep this block adjacent to vectors_overwrite for the same reason.
+#
+# This route does NOT open the Zarr array.  It reads shape from the
+# StorageRegistry cache (O(1) warm, O(N·D) cold first call).  The returned
+# nrows value is a snapshot — see RC-1 in the design notes for issue #36.
+
+
+@router.get(
+    "/datasets/{dataset_id:path}/vectors/count",
+    response_model=VectorCountResponse,
+    summary="Return the current row and column count of a dataset",
+    description=(
+        "Reads shape from the StorageRegistry cache. "
+        "O(1) when cache is warm; O(N·D) on first call after startup or reload. "
+        "nrows reflects the cache at the moment of the call — a concurrent "
+        "append_vectors() may produce a higher value immediately after. "
+        "Returns 404 if dataset_id is not known to the registry."
+    ),
+)
+def vectors_count(
+    dataset_id: str,
+    reg: StorageRegistry = Depends(_registry),
+) -> VectorCountResponse:
+    """Return the current row and column count for an existing 2-D dataset.
+
+    Implementation notes
+    --------------------
+    - Shape is read from StorageRegistry.get_dataset() — no Zarr I/O.
+    - 404 is raised if the dataset is not found in the registry cache.
+      This covers both truly absent datasets and datasets whose cache entry
+      was evicted by a concurrent DELETE (acceptable: the client should retry).
+    - Only 2-D arrays are supported (shape has exactly 2 elements).
+      A dataset with ndim != 2 raises 422 with an explanatory message.
+      This should not occur in production (all ingested arrays are 2-D) but
+      is guarded defensively.
+
+    Raises:
+        HTTPException 404: dataset_id not found in registry.
+        HTTPException 422: dataset is not 2-D.
+    """
+    summary = reg.get_dataset(dataset_id)
+    if summary is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Dataset '{dataset_id}' not found.",
+        )
+    if len(summary.shape) != 2:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Dataset '{dataset_id}' is not 2-D (shape={summary.shape}). "
+                "vectors/count requires a 2-D array."
+            ),
+        )
+    return VectorCountResponse(
+        dataset_id=dataset_id,
+        nrows=summary.shape[0],
+        ncols=summary.shape[1],
+    )
 
 
 # ---------------------------------------------------------------------------
