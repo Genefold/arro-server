@@ -200,3 +200,4 @@ opencode.json
 .bootstrapignore 
 
 roadmap.md.DS_Store
+.DS_Store
