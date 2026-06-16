@@ -11,6 +11,12 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
+# Build tools required by arrowspace (Rust extension) and pytrec-eval-terrier (C).
+# Must come before any pip install that pulls compiled packages.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends gcc g++ libc6-dev \
+    && rm -rf /var/lib/apt/lists/*
+
 # Install build prerequisites first to maximise layer reuse.
 COPY pyproject.toml README.md ./
 COPY src ./src
