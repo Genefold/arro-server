@@ -80,11 +80,11 @@ from .errors import MetadataUnavailable, OptionalDependencyMissing
 log = logging.getLogger(__name__)
 
 DEFAULT_GRAPH_PARAMS: dict[str, Any] = {
-    "eps": 1.0,
-    "k": 6,
-    "topk": 3,
-    "p": 2.0,
-    "sigma": 1.0,
+    "eps": 1.31,
+    "k": 30,
+    "topk": 30,
+    "p": 1.8,
+    "sigma": 0.535,
 }
 
 DEFAULT_SEARCH_K: int = 10
@@ -543,11 +543,11 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
 
         Returns the ``(aspace, gl)`` tuple from the single build call.
         """
-        rows: list[list[float]] = array.tolist()
         try:
             builder = self._mod.ArrowSpaceBuilder()
             gp = graph_params
             if hasattr(builder, "with_lambda_graph") and hasattr(builder, "with_persistence"):
+                rows: list[list[float]] = array.tolist()
                 builder = (
                     builder.with_lambda_graph(gp["eps"], gp["k"], gp["topk"], gp["p"], gp["sigma"])
                     .with_sparsity_check(False)
