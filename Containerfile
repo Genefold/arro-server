@@ -1,43 +1,46 @@
-# Podman-compatible (also a valid Dockerfile). Build with:
-#   podman build -t arro-server -f Containerfile .
-#   docker build -t arro-server -f Containerfile .
-
-FROM docker.io/library/python:3.12-slim AS base
+# syntax=docker/dockerfile:1
+# ── Stage 1: builder — compila arrowspace da Rust ────────────────────────────
+FROM python:3.12-slim AS builder
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+    PIP_NO_CACHE_DIR=1
 
 WORKDIR /app
 
-# Build tools required by arrowspace (Rust extension) and pytrec-eval-terrier (C).
-# Must come before any pip install that pulls compiled packages.
+# Toolchain Rust necessaria solo in questo stage
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends gcc g++ libc6-dev \
+    && apt-get install -y --no-install-recommends gcc g++ libc6-dev curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Install build prerequisites first to maximise layer reuse.
 COPY pyproject.toml README.md ./
 COPY src ./src
 COPY frontend ./frontend
 
 RUN pip install --upgrade pip \
-    && pip install ".[zarr]"
+    && pip install . --prefix=/install
 
-# Optional: install pyarrow at build time.
-ARG INSTALL_ARROW=0
-# Optional: install arrowspace (pip install arrowspace).
-# Repo: https://github.com/tuned-org-uk/pyarrowspace
-ARG INSTALL_ARROWSPACE=0
-RUN if [ "$INSTALL_ARROW" = "1" ]; then pip install ".[arrow]"; fi \
-    && if [ "$INSTALL_ARROWSPACE" = "1" ]; then pip install ".[arrowspace]" || \
-        echo "arrowspace not installable in this image; sidecar adapter will be used"; fi
+# ── Stage 2: runtime — solo il necessario ────────────────────────────────────
+FROM python:3.12-slim AS runtime
 
-# Run as a non-root user for security.
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+WORKDIR /app
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copia solo i binari compilati — niente gcc/g++/Rust
+COPY --from=builder /install /usr/local
+COPY --from=builder /app/src ./src
+COPY --from=builder /app/frontend ./frontend
+
 RUN adduser --disabled-password --gecos "" appuser \
     && mkdir -p /data /app/arrowspace_index \
     && chown appuser:appuser /data /app/arrowspace_index
+
 USER appuser
 
 EXPOSE 8000
