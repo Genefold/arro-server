@@ -11,7 +11,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends gcc g++ libc6-dev curl \
     && rm -rf /var/lib/apt/lists/*
 
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --no-modify-path
 ENV PATH="/root/.cargo/bin:${PATH}"
 
 RUN pip install maturin \
