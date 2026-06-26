@@ -53,10 +53,13 @@ built, then recorded in the manifest so the same name is used on reload.
 
 Note on ``build_and_store()`` vs ``build()``:
   ``ArrowSpaceBuilder.build_and_store()`` hardcodes the output directory to
-  ``CWD/storage/`` inside the Rust code and cannot be redirected.  We
-  therefore use ``build()`` for the in-memory result and separately invoke
-  the builder with ``with_persistence(dir_path, dataset_name)`` set to the
-  configured ``index_store``, so the output respects the server's settings.
+  ``CWD/storage/`` inside the Rust code and cannot be redirected.  Until
+  ``with_persistence()`` is exposed on the Python side, PATH 2 in
+  ``_build_with_persistence()`` works around this by diffing the directory
+  before/after, detecting the UUID prefix from file names, renaming every file
+  to use the canonical ``{dataset_name}`` prefix, and moving them atomically
+  into ``index_store``.  Once ``with_persistence`` lands, PATH 1 is preferred
+  and PATH 2 (this workaround) becomes dead code.
 """
 
 from __future__ import annotations
@@ -658,16 +661,21 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
             uuid_prefix = prefixes.pop()
             index_store.mkdir(parents=True, exist_ok=True)
 
+            moved: list[tuple[Path, Path]] = []
             try:
                 for src in new_files:
                     new_name = src.name.replace(uuid_prefix, dataset_name, 1)
                     dst = index_store / new_name
                     _move_file(src, dst)
+                    moved.append((src, dst))
             except Exception:
-                # On partial move failure, clean up anything already moved
-                # plus anything still in CWD/storage/
-                _cleanup_files({index_store / src.name.replace(uuid_prefix, dataset_name, 1)
-                                for src in new_files})
+                # Remove files already moved to index_store
+                for _, dst in moved:
+                    try:
+                        dst.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+                # Remove files still in CWD/storage/
                 _cleanup_files(new_files)
                 raise
 
@@ -825,6 +833,15 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
         # Resolve dataset_name atomically inside the lock, BEFORE writing any
         # Parquet file.  Pre-register the entry so the name is stable under
         # concurrent builds on the same dataset_id.
+        #
+        # NOTE: pre-writing before the build creates a window where process
+        # death between this write and the cleanup in the except block below
+        # produces an orphan manifest entry (no Parquet files on disk).  On a
+        # subsequent reload_from_manifest, load_arrowspace will fail for this
+        # entry.  This is an accepted trade-off: the alternative (write after
+        # build) would not survive a crash during the build itself either, and
+        # the orphan entry is trivially fixable by deleting it from the
+        # manifest or re-running the build.
         with _MANIFEST_LOCK:
             manifest = _read_manifest(index_store)
             existing = manifest.get(dataset_id, {})
