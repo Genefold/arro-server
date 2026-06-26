@@ -637,9 +637,7 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
             new_files: set[Path] = after_all - before_all
 
             if not new_files:
-                raise RuntimeError(
-                    f"build_and_store wrote no files to {cwd_storage}"
-                )
+                raise RuntimeError(f"build_and_store wrote no files to {cwd_storage}")
 
             # Detect the common UUID prefix: all files share the form
             # {prefix}-{suffix}.{ext} where the suffix may itself contain
