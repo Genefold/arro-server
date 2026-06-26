@@ -46,7 +46,7 @@ RUN pip install --no-cache-dir --no-deps .
 
 RUN adduser --disabled-password --gecos "" appuser \
     && mkdir -p /data /app/arrowspace_index \
-    && chown appuser:appuser /data /app/arrowspace_index
+    && chown appuser:appuser /app /data /app/arrowspace_index
 
 USER appuser
 
