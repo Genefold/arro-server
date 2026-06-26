@@ -499,6 +499,74 @@ class TestMoveSemantics:
             with pytest.raises((IOError, RuntimeError, OSError)):
                 adapter.build_index(DATASET_ID, FIXTURE_ARRAY.copy(), tmp_store)
 
+    def test_partial_move_failure_cleans_already_moved_files(
+        self, adapter, tmp_store, tmp_cwd
+    ):
+        from arro_server.arrowspace_adapter import _move_file as real_move
+
+        call_count = [0]
+
+        def failing_move(src, dst):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                real_move(src, dst)
+            else:
+                raise OSError("simulated mid-move failure")
+
+        with patch(
+            "arro_server.arrowspace_adapter._move_file", side_effect=failing_move
+        ):
+            with pytest.raises((OSError, RuntimeError, Exception)):
+                adapter.build_index(DATASET_ID, FIXTURE_ARRAY.copy(), tmp_store)
+
+        leaked = [
+            p for p in tmp_store.iterdir()
+            if p.is_file() and p.name != "index_manifest.json"
+        ]
+        assert leaked == [], f"File orfani in index_store dopo move parziale: {leaked}"
+
+        storage = tmp_cwd / "storage"
+        leftover = list(storage.glob("*")) if storage.exists() else []
+        assert leftover == [], f"File non rimossi da CWD/storage/: {leftover}"
+
+    def test_partial_move_failure_does_not_write_manifest(
+        self, adapter, tmp_store, tmp_cwd
+    ):
+        from arro_server.arrowspace_adapter import _move_file as real_move, _read_manifest
+
+        call_count = [0]
+
+        def failing_move(src, dst):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                real_move(src, dst)
+            else:
+                raise OSError("simulated mid-move failure")
+
+        with patch(
+            "arro_server.arrowspace_adapter._move_file", side_effect=failing_move
+        ):
+            with pytest.raises(Exception):
+                adapter.build_index(DATASET_ID, FIXTURE_ARRAY.copy(), tmp_store)
+
+        assert DATASET_ID not in _read_manifest(tmp_store)
+
+    def test_all_files_moved_no_partial_cleanup_triggered(
+        self, adapter, tmp_store, tmp_cwd
+    ):
+        from arro_server.arrowspace_adapter import _read_manifest
+
+        adapter.build_index(DATASET_ID, FIXTURE_ARRAY.copy(), tmp_store)
+
+        dname = _read_manifest(tmp_store)[DATASET_ID]["dataset_name"]
+        build_files = [
+            p for p in tmp_store.iterdir()
+            if p.is_file() and p.name != "index_manifest.json"
+        ]
+        assert len(build_files) == len(_REAL_BUILD_AND_STORE_FILES)
+        for p in build_files:
+            assert p.name.startswith(dname)
+
 
 # ===========================================================================
 # 6. Validation errors
@@ -659,6 +727,22 @@ class TestBuildFailureCleansUp:
             )
         adapter.build_index(DATASET_ID, FIXTURE_ARRAY.copy(), tmp_store)
         assert adapter.has_index(DATASET_ID)
+
+    def test_move_failure_on_first_file_nothing_in_index_store(
+        self, adapter, tmp_store, tmp_cwd
+    ):
+        with patch(
+            "arro_server.arrowspace_adapter._move_file",
+            side_effect=OSError("instant failure"),
+        ):
+            with pytest.raises(Exception):
+                adapter.build_index(DATASET_ID, FIXTURE_ARRAY.copy(), tmp_store)
+
+        leaked = [
+            p for p in tmp_store.iterdir()
+            if p.is_file() and p.name != "index_manifest.json"
+        ]
+        assert leaked == [], f"File inattesi in index_store: {leaked}"
 
 
 # ===========================================================================
