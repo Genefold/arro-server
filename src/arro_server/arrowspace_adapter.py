@@ -691,11 +691,16 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
             )
         slug = self._slug(dataset_id)
         index_store.mkdir(parents=True, exist_ok=True)
-        # Generate tentative dataset_name for Parquet persistence.
-        # The authoritative name is resolved inside _MANIFEST_LOCK below
-        # to ensure the manifest read and write are consistent under
-        # concurrent builds.
-        dataset_name = self._new_dataset_name(slug)
+
+        # Resolve dataset_name atomically inside the lock, BEFORE writing any
+        # Parquet file.  Pre-register the entry so the name is stable under
+        # concurrent builds on the same dataset_id.
+        with _MANIFEST_LOCK:
+            manifest = _read_manifest(index_store)
+            existing = manifest.get(dataset_id, {})
+            dataset_name = existing.get("dataset_name") or self._new_dataset_name(slug)
+            manifest[dataset_id] = {"dataset_name": dataset_name, "graph_params": gp}
+            _write_manifest(index_store, manifest)
 
         log.info(
             "Building index for '%s' (dataset_name='%s') shape=%s params=%s",
@@ -705,8 +710,14 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
             gp,
         )
 
-        # Single build: persist Parquet AND get the in-memory result in one call
-        aspace, gl = self._build_with_persistence(index_store, dataset_name, arr64, gp)
+        try:
+            aspace, gl = self._build_with_persistence(index_store, dataset_name, arr64, gp)
+        except Exception:
+            with _MANIFEST_LOCK:
+                manifest = _read_manifest(index_store)
+                manifest.pop(dataset_id, None)
+                _write_manifest(index_store, manifest)
+            raise
 
         entry = _IndexEntry(
             aspace=aspace,
@@ -724,16 +735,6 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
 
         # Persist CSR (supplementary, for export/inspection)
         self._persist_csr(index_store, slug, gl, meta)
-
-        # Atomically read-modify-write the manifest.
-        # _MANIFEST_LOCK ensures concurrent build_index calls on different
-        # dataset_ids do not overwrite each other's entries.
-        with _MANIFEST_LOCK:
-            manifest = _read_manifest(index_store)
-            existing = manifest.get(dataset_id, {})
-            dataset_name = existing.get("dataset_name") or dataset_name
-            manifest[dataset_id] = {"dataset_name": dataset_name, "graph_params": gp}
-            _write_manifest(index_store, manifest)
 
         return meta
 
