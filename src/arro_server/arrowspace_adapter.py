@@ -63,6 +63,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import shutil
 import threading
 import uuid
 from abc import ABC, abstractmethod
@@ -455,6 +457,42 @@ def _write_manifest(index_store: Path, manifest: dict[str, Any]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Parquet file helpers for PATH 2 fallback
+# ---------------------------------------------------------------------------
+
+
+def _move_file(src: Path, dst: Path) -> None:
+    """Move *src* to *dst*, preferring atomic ``os.rename``.
+
+    ``os.rename`` is atomic when *src* and *dst* reside on the same
+    filesystem.  If the rename fails with an OS-level error (e.g.
+    cross-device link) a copy-and-delete via ``shutil.move`` is used
+    instead.  The caller is responsible for any required directory
+    creation (see ``index_store.mkdir()``).
+    """
+    try:
+        os.rename(src, dst)
+    except OSError:
+        log.warning(
+            "os.rename failed (likely cross-device link); "
+            "falling back to shutil.move for %s -> %s. "
+            "This is NOT atomic — power loss mid-move may corrupt the index.",
+            src,
+            dst,
+        )
+        shutil.move(str(src), str(dst))
+
+
+def _cleanup_files(files: set[Path]) -> None:
+    """Best-effort removal of a set of files; errors are logged, not propagated."""
+    for p in files:
+        try:
+            p.unlink(missing_ok=True)
+        except Exception:
+            log.warning("Failed to remove %s during cleanup", p, exc_info=True)
+
+
+# ---------------------------------------------------------------------------
 # Live adapter
 # ---------------------------------------------------------------------------
 
@@ -529,47 +567,139 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
     ) -> tuple[Any, Any]:
         """Build ArrowSpace index and persist Parquet in a single call.
 
-        Uses the builder's ``with_persistence`` option so that the on-disk
-        files are guaranteed identical to the in-memory result.  Falls back
-        to a bare ``build()`` when the installed arrowspace version does
-        not expose ``with_persistence`` (Phase 1 behaviour — index lives
-        in memory only).
+        Three paths, tried in order:
 
-        We cannot use ``build_and_store()`` directly because its Rust
-        implementation hardcodes the output path to ``CWD/storage/``.
-        Instead we configure the builder with ``with_persistence(dir, name)``
-        before calling ``build()``, which triggers the same Parquet write path
-        but respects the configured ``index_store``.
+        PATH 1 (future, preferred)
+            ``with_persistence`` is exposed on ``ArrowSpaceBuilder``.
+            Builder is configured with the target ``index_store`` and
+            ``dataset_name`` so Parquet files land directly at the correct
+            path.  When pyarrowspace exposes this method, this path is taken
+            automatically and paths 2/3 become dead code.
 
-        Returns the ``(aspace, gl)`` tuple from the single build call.
+        PATH 2 (temporary fallback)
+            ``build_and_store`` is exposed but ``with_persistence`` is not.
+            ``build_and_store`` hardcodes its output to ``CWD/storage/``
+            with a random UUID-based name.  We diff the directory before and
+            after, discover the newly written Parquet files, rename them to
+            the canonical ``{dataset_name}_items.parquet`` /
+            ``{dataset_name}_graph.parquet``, and atomically move them into
+            ``index_store``.
+
+            Once ``with_persistence`` lands in a future pyarrowspace release
+            this entire block is skipped and can be removed.
+
+        PATH 3 (last resort)
+            ``build()`` without persistence.  Index lives in memory only.
+            On restart the index must be rebuilt.  A warning is logged.
         """
-        try:
-            builder = self._mod.ArrowSpaceBuilder()
-            gp = graph_params
-            if hasattr(builder, "with_lambda_graph") and hasattr(builder, "with_persistence"):
-                rows: list[list[float]] = array.tolist()
-                builder = (
-                    builder.with_lambda_graph(gp["eps"], gp["k"], gp["topk"], gp["p"], gp["sigma"])
-                    .with_sparsity_check(False)
-                    .with_persistence(str(index_store), dataset_name)
-                )
-                aspace, gl = builder.build(rows)
-                log.info(
-                    "Persisted ArrowSpace Parquet for '%s' at %s",
-                    dataset_name,
-                    index_store,
-                )
-                return aspace, gl
+        cwd_storage = Path(os.getcwd()) / "storage"
+        builder = self._mod.ArrowSpaceBuilder()
+        gp = graph_params
 
+        # ------------------------------------------------------------------
+        # PATH 1 — with_persistence available (future)
+        # ------------------------------------------------------------------
+        if hasattr(builder, "with_lambda_graph") and hasattr(builder, "with_persistence"):
+            rows: list[list[float]] = array.tolist()
+            builder = (
+                builder.with_lambda_graph(gp["eps"], gp["k"], gp["topk"], gp["p"], gp["sigma"])
+                .with_sparsity_check(False)
+                .with_persistence(str(index_store), dataset_name)
+            )
+            aspace, gl = builder.build(rows)
+            log.info(
+                "Persisted ArrowSpace Parquet for '%s' at %s (PATH 1)",
+                dataset_name,
+                index_store,
+            )
+            return aspace, gl
+
+        # ------------------------------------------------------------------
+        # PATH 2 — build_and_store + file move (temporary fallback)
+        # ------------------------------------------------------------------
+        if hasattr(builder, "build_and_store"):
+            cwd_storage.mkdir(parents=True, exist_ok=True)
+            # Snapshot ALL files (Parquet + JSON metadata)
+            before_all: set[Path] = set(cwd_storage.iterdir())
+
+            try:
+                aspace, gl = builder.build_and_store(gp, array)
+            except Exception:
+                after_all = set(cwd_storage.iterdir())
+                _cleanup_files(after_all - before_all)
+                log.warning("build_and_store failed for '%s'", dataset_name, exc_info=True)
+                raise
+
+            after_all = set(cwd_storage.iterdir())
+            new_files: set[Path] = after_all - before_all
+
+            if not new_files:
+                raise RuntimeError(
+                    f"build_and_store wrote no files to {cwd_storage}"
+                )
+
+            # Detect the common UUID prefix: all files share the form
+            # {prefix}-{suffix}.{ext} where the suffix may itself contain
+            # hyphens (e.g. "laplacian-input", "arrowspace_metadata").
+            # Split on the FIRST hyphen only.
+            prefixes: set[str] = set()
+            for f in new_files:
+                stem = f.stem  # e.g. "dataset_a1b2-raw_input"
+                parts = stem.split("-", 1)
+                prefixes.add(parts[0])
+
+            if len(prefixes) != 1:
+                _cleanup_files(new_files)
+                raise RuntimeError(
+                    f"build_and_store wrote files with inconsistent prefixes: "
+                    f"{sorted(prefixes)}. Files: {sorted(f.name for f in new_files)}"
+                )
+
+            uuid_prefix = prefixes.pop()
+            index_store.mkdir(parents=True, exist_ok=True)
+
+            try:
+                for src in new_files:
+                    new_name = src.name.replace(uuid_prefix, dataset_name, 1)
+                    dst = index_store / new_name
+                    _move_file(src, dst)
+            except Exception:
+                # On partial move failure, clean up anything already moved
+                # plus anything still in CWD/storage/
+                _cleanup_files({index_store / src.name.replace(uuid_prefix, dataset_name, 1)
+                                for src in new_files})
+                _cleanup_files(new_files)
+                raise
+
+            log.info(
+                "Moved build_and_store output to index_store '%s' as "
+                "dataset_name='%s' (%d file(s), PATH 2)",
+                index_store,
+                dataset_name,
+                len(new_files),
+            )
+
+            # Best-effort cleanup: remove CWD/storage/ if now empty
+            try:
+                cwd_storage.rmdir()
+            except OSError:
+                pass
+
+            return aspace, gl
+
+        # ------------------------------------------------------------------
+        # PATH 3 — bare build (memory only)
+        # ------------------------------------------------------------------
+        try:
             log.warning(
-                "ArrowSpaceBuilder does not expose with_persistence; "
-                "index for '%s' will not survive restart",
+                "ArrowSpaceBuilder does not expose with_persistence or "
+                "build_and_store; index for '%s' will not survive restart",
                 dataset_name,
             )
             return builder.build(gp, array)
         except Exception:
             log.warning(
-                "Failed to persist Parquet for '%s'; building in memory only",
+                "Failed to build for '%s'; in-memory fallback also failed",
                 dataset_name,
                 exc_info=True,
             )
