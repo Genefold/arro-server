@@ -41,6 +41,7 @@ POST /api/admin/reload                                     -- hot-reload Storage
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any
 
@@ -194,7 +195,7 @@ def _require_admin_token(
 
 
 @admin_router.post("/reload", dependencies=[Depends(_require_admin_token)])
-def admin_reload(
+async def admin_reload(
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
     """Invalidate all LRU caches and re-scan data_roots.
@@ -210,12 +211,14 @@ def admin_reload(
     reset_adapter_cache()
 
     registry = get_registry()
-    datasets = registry.list_datasets()  # triggers full O(N) rescan here (expected for admin)
+    # TODO(multi-worker): replace asyncio.to_thread with ARQ/Celery task
+    datasets = await asyncio.to_thread(registry.list_datasets)
 
     new_adapter = load_adapter()
     index_store = Path(settings.index_store).expanduser().resolve()
     try:
-        loaded = new_adapter.reload_from_manifest(index_store)
+        # TODO(multi-worker): replace asyncio.to_thread with ARQ/Celery task
+        loaded = await asyncio.to_thread(new_adapter.reload_from_manifest, index_store)
     except Exception:
         loaded = []
 
@@ -764,7 +767,7 @@ def dataset_search_sidecar(
 
 
 @router.post("/datasets/{dataset_id:path}/index")
-def build_index(
+async def build_index(
     dataset_id: str,
     body: IndexBuildRequest = IndexBuildRequest(),
     reg: StorageRegistry = Depends(_registry),
@@ -778,7 +781,9 @@ def build_index(
     index_store = Path(settings.index_store).expanduser().resolve()
     effective_params = body.graph_params or DEFAULT_GRAPH_PARAMS
     try:
-        meta = adapter.build_index(
+        # TODO(multi-worker): replace asyncio.to_thread with ARQ/Celery task
+        meta = await asyncio.to_thread(
+            adapter.build_index,
             dataset_id=dataset_id,
             array=arr,
             index_store=index_store,
@@ -992,7 +997,7 @@ def dataset_search(
 
 
 @router.delete("/datasets/{dataset_id:path}/index")
-def delete_index(
+async def delete_index(
     dataset_id: str,
     settings: Settings = Depends(get_settings),
     adapter: ArrowSpaceAdapter = Depends(_arrowspace),
@@ -1008,7 +1013,10 @@ def delete_index(
     Returns 404 if no index exists for the given dataset ID.
     """
     index_store = Path(settings.index_store).expanduser().resolve()
-    existed = adapter.delete_index(dataset_id=dataset_id, index_store=index_store)
+    # TODO(multi-worker): replace asyncio.to_thread with ARQ/Celery task
+    existed = await asyncio.to_thread(
+        adapter.delete_index, dataset_id=dataset_id, index_store=index_store
+    )
     if not existed:
         raise HTTPException(
             status_code=404,
