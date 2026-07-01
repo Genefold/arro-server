@@ -102,6 +102,15 @@ MANIFEST_FILENAME = "index_manifest.json"
 _MANIFEST_LOCK = threading.Lock()
 
 
+def _try_import_polars() -> Any | None:
+    """Lazily import Polars. Returns the module or None if unavailable."""
+    try:
+        import polars as pl  # type: ignore
+        return pl
+    except ImportError:
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Abstract base
 # ---------------------------------------------------------------------------
@@ -190,7 +199,51 @@ class _SidecarAdapter(ArrowSpaceAdapter):
     def sidecar_search(
         self, dataset_path: Path, q: str, *, limit: int = 20
     ) -> list[dict[str, Any]]:
-        data = self._read(dataset_path, "index.json")
+        index_file = dataset_path / "_arrowspace" / "index.json"
+        if not index_file.exists():
+            raise MetadataUnavailable(f"{index_file} not found")
+
+        pl = _try_import_polars()
+        if pl is not None:
+            return self._sidecar_search_polars(pl, index_file, q, limit=limit)
+        return self._sidecar_search_fallback(index_file, q, limit=limit)
+
+    @staticmethod
+    def _sidecar_search_polars(
+        pl: Any, index_file: Path, q: str, *, limit: int
+    ) -> list[dict[str, Any]]:
+        q_lower = q.lower()
+        # read_json is eager but SIMD string kernels are significantly faster
+        # than the Python loop for large item counts.
+        # scan_ndjson (true streaming) is reserved for the NDJSON migration follow-up.
+        df = pl.read_json(index_file)
+        if "items" in df.columns:
+            df = df.select(pl.col("items").explode()).unnest("items")
+        rows = (
+            df.lazy()
+            .filter(
+                pl.col("id").cast(pl.Utf8).str.to_lowercase().str.contains(q_lower, literal=True)
+                | pl.col("tags")
+                .list.eval(
+                    pl.element().cast(pl.Utf8).str.to_lowercase().str.contains(q_lower, literal=True)
+                )
+                .list.any()
+            )
+            .select(["id", "tags"])
+            .limit(limit)
+            .collect()
+        )
+        return [
+            {"id": str(row["id"]), "tags": list(row["tags"])}
+            for row in rows.iter_rows(named=True)
+        ]
+
+    @staticmethod
+    def _sidecar_search_fallback(
+        index_file: Path, q: str, *, limit: int
+    ) -> list[dict[str, Any]]:
+        """Pure-Python fallback when Polars is not installed."""
+        data = json.loads(index_file.read_text())
         items: list[dict[str, Any]] = data.get("items", [])
         q_lower = q.lower()
         results = []

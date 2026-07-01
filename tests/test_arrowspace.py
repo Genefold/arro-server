@@ -923,3 +923,92 @@ class TestSidecarFallback:
         r = sidecar_client.get(f"/api/datasets/{DATASET_ID}/search?q=alpha")
         assert r.status_code == 200
         assert r.json()["results"][0]["id"] == "row-0"
+
+
+class TestSidecarSearchParity:
+    """Polars and fallback paths must produce identical results."""
+
+    @pytest.fixture
+    def index_json(self, tmp_path: Path) -> Path:
+        d = tmp_path / "_arrowspace"
+        d.mkdir()
+        index = {
+            "items": [
+                {"id": "row-0", "tags": ["alpha", "beta"]},
+                {"id": "row-1", "tags": ["gamma", "delta"]},
+                {"id": "row-2", "tags": ["alpha-omega", "epsilon"]},
+                {"id": "row-42", "tags": ["zeta"]},
+                {"id": "no-match", "tags": ["eta"]},
+            ]
+        }
+        f = d / "index.json"
+        f.write_text(json.dumps(index))
+        return f.parent  # return the dataset_path
+
+    @pytest.mark.parametrize("use_polars", [True, False])
+    def test_sidecar_search_parity(self, tmp_path, use_polars, monkeypatch):
+        from arro_server.arrowspace_adapter import _SidecarAdapter
+
+        if not use_polars:
+            monkeypatch.setattr("arro_server.arrowspace_adapter._try_import_polars", lambda: None)
+
+        d = tmp_path / "_arrowspace"
+        d.mkdir()
+        index = {
+            "items": [
+                {"id": "row-0", "tags": ["alpha", "beta"]},
+                {"id": "row-1", "tags": ["gamma", "delta"]},
+                {"id": "row-42", "tags": ["zeta"]},
+                {"id": "no-match", "tags": ["eta"]},
+            ]
+        }
+        (d / "index.json").write_text(json.dumps(index))
+
+        adapter = _SidecarAdapter()
+        results = adapter.sidecar_search(tmp_path, "alpha", limit=5)
+        assert len(results) == 1
+        assert results[0]["id"] == "row-0"
+
+        # broader: search "z" should match row-42 (tag "zeta")
+        results2 = adapter.sidecar_search(tmp_path, "z", limit=5)
+        assert len(results2) == 1
+        assert results2[0]["id"] == "row-42"
+
+        # search "ow" should match all rows with "row" in id
+        results3 = adapter.sidecar_search(tmp_path, "ow", limit=5)
+        assert len(results3) == 3
+        assert {r["id"] for r in results3} == {"row-0", "row-1", "row-42"}
+
+        # search "row" matches all rows
+        results4 = adapter.sidecar_search(tmp_path, "row", limit=5)
+        assert len(results4) == 3
+        assert {r["id"] for r in results4} == {"row-0", "row-1", "row-42"}
+
+    @pytest.mark.parametrize("use_polars", [True, False])
+    def test_sidecar_search_empty_results(self, tmp_path, use_polars, monkeypatch):
+        from arro_server.arrowspace_adapter import _SidecarAdapter
+
+        if not use_polars:
+            monkeypatch.setattr("arro_server.arrowspace_adapter._try_import_polars", lambda: None)
+
+        d = tmp_path / "_arrowspace"
+        d.mkdir()
+        (d / "index.json").write_text(
+            json.dumps({"items": [{"id": "a", "tags": ["x"]}]})
+        )
+
+        adapter = _SidecarAdapter()
+        results = adapter.sidecar_search(tmp_path, "zzz", limit=5)
+        assert results == []
+
+    @pytest.mark.parametrize("use_polars", [True, False])
+    def test_sidecar_search_missing_file(self, tmp_path, use_polars, monkeypatch):
+        from arro_server.arrowspace_adapter import _SidecarAdapter
+        from arro_server.errors import MetadataUnavailable
+
+        if not use_polars:
+            monkeypatch.setattr("arro_server.arrowspace_adapter._try_import_polars", lambda: None)
+
+        adapter = _SidecarAdapter()
+        with pytest.raises(MetadataUnavailable):
+            adapter.sidecar_search(tmp_path, "q")

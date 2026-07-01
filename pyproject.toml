@@ -22,6 +22,7 @@ dependencies = [
 
 [project.optional-dependencies]
 arrow = ["pyarrow>=15.0"]
+polars = ["polars>=1.0"]
 dev = [
     "pytest>=8.0",
     "fastapi[standard]>=0.110",
