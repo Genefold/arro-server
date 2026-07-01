@@ -17,12 +17,12 @@ dependencies = [
     "pydantic-settings>=2.10.3",
     "numpy>=1.26",
     "zarr>=3.0",
-    "arrowspace>=0.26.2"
+    "polars>=1.0",
+    "arrowspace>=0.26.2",
 ]
 
 [project.optional-dependencies]
 arrow = ["pyarrow>=15.0"]
-polars = ["polars>=1.0"]
 dev = [
     "pytest>=8.0",
     "fastapi[standard]>=0.110",
