@@ -219,13 +219,17 @@ class _SidecarAdapter(ArrowSpaceAdapter):
         df = pl.read_json(index_file)
         if "items" in df.columns:
             df = df.select(pl.col("items").explode()).unnest("items")
+        # ponytail: cast ensures tags is List[Utf8] even when Polars infers Null for empty arrays
         rows = (
             df.lazy()
+            .with_columns(
+                pl.col("tags").cast(pl.List(pl.Utf8)).alias("tags")
+            )
             .filter(
                 pl.col("id").cast(pl.Utf8).str.to_lowercase().str.contains(q_lower, literal=True)
                 | pl.col("tags")
                 .list.eval(
-                    pl.element().cast(pl.Utf8).str.to_lowercase().str.contains(q_lower, literal=True)
+                    pl.element().str.to_lowercase().str.contains(q_lower, literal=True)
                 )
                 .list.any()
             )
