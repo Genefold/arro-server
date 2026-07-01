@@ -25,7 +25,7 @@ RUN pip install --prefix=/install \
     "numpy>=1.26" \
     "zarr>=3.0" \
     "pyarrow>=15.0" \
-    "polars>=1.0"
+    "polars>=1.2"
 
 FROM python:3.12-slim AS runtime
 
