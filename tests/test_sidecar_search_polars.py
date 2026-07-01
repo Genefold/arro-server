@@ -5,8 +5,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import polars as pl
 import pytest
+
+pl = pytest.importorskip("polars", reason="polars not installed — skipping Polars path tests")
 
 from arro_server.arrowspace_adapter import _SidecarAdapter
 
