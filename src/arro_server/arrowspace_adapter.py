@@ -206,7 +206,7 @@ class _SidecarAdapter(ArrowSpaceAdapter):
         q_lower = q.lower()
         df = pl.read_json(index_file)
         if "items" in df.columns:
-            df = df.select(pl.col("items").explode()).unnest("items")
+            df = df.select(pl.col("items").explode(empty_as_null=True)).unnest("items")
         rows = (
             df.lazy()
             .with_columns(pl.col("tags").cast(pl.List(pl.Utf8)).alias("tags"))
@@ -221,7 +221,11 @@ class _SidecarAdapter(ArrowSpaceAdapter):
             .collect()
         )
         return [
-            {"id": str(row["id"]), "tags": list(row["tags"])} for row in rows.iter_rows(named=True)
+            {
+                "id": str(row["id"]),
+                "tags": list(row["tags"]) if row["tags"] is not None else [],
+            }
+            for row in rows.iter_rows(named=True)
         ]
 
     def build_index(
