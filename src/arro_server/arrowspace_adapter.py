@@ -113,6 +113,7 @@ class ItemsPage:
     has_more: bool
     total: int | None = None
 
+
 # Protects the read→modify→write cycle on index_manifest.json.
 # All accesses to _read_manifest + _write_manifest in build_index and
 # delete_index must be wrapped in this lock.
@@ -1010,19 +1011,17 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
         }
 
     def get_items(self, dataset_id: str, *, offset: int, limit: int) -> ItemsPage:
-        """Return a bounded window of items, O(limit) memory.
+        """Return at most ``limit`` rows.
 
-        ArrowSpace (0.26.x) has no row-window API — only get_item(i) and
-        get_all_items(). We therefore loop get_item() over the requested
-        window so only ``limit`` rows are materialized; the full matrix is
-        never converted to Python lists.
-
-        has_more/total come from entry.nitems (metadata, no I/O).
+        The adapter does not call ``get_all_items()`` and only converts the
+        requested rows to Python objects. ArrowSpace 0.26.x exposes scalar
+        ``get_item()`` access rather than a native window API; end-to-end
+        RSS behavior must be validated separately (see PR benchmark).
         """
         enforce_items_window(
             offset=offset,
             limit=limit,
-            max_window=get_settings().max_window,
+            max_window=get_settings().items_max_limit,
         )
         entry = self._get_entry(dataset_id)
         end = min(offset + limit, entry.nitems)

@@ -156,8 +156,8 @@ def enforce_items_window(*, offset: int, limit: int, max_window: int) -> None:
         raise WindowValidationError(f"limit must be <= {max_window}")
     if offset > MAX_SAFE_OFFSET:
         raise WindowValidationError("offset is too large")
-    if offset + limit < offset:
-        raise WindowValidationError("offset and limit overflow")
+    if offset > MAX_SAFE_OFFSET - limit:
+        raise WindowValidationError("offset and limit exceed safe range")
 
 
 def trailing_product(shape: tuple[int, ...]) -> int:

@@ -842,7 +842,7 @@ def dataset_get_all_items(
     enforce_items_window(
         offset=offset,
         limit=effective_limit,
-        max_window=settings.max_window,
+        max_window=settings.items_max_limit,
     )
     page = adapter.get_items(dataset_id, offset=offset, limit=effective_limit)
     return {

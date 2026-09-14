@@ -4,7 +4,7 @@ from functools import cached_property, lru_cache
 from pathlib import Path
 from typing import Annotated
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
@@ -36,11 +36,13 @@ class Settings(BaseSettings):
     # max_window: hard cap on the number of *rows* (leading-axis elements)
     # returned in a single /data or /slice response. Note that for N-D arrays
     # the total element count is max_window * product(shape[1:]).
-    # Also caps ?limit on /datasets/{id}/items.
     max_window: int = 10_000
     # items_default_limit: rows returned by /datasets/{id}/items when ?limit
     # is omitted.
     items_default_limit: int = 50
+    # items_max_limit: hard cap on ?limit for /datasets/{id}/items. Deliberately
+    # much tighter than max_window: a page of vectors is 384 floats per row.
+    items_max_limit: int = 100
     serve_frontend: bool = True
     frontend_dir: str | None = None
     # Directory where graph-Laplacian Zarr arrays are persisted.
@@ -58,6 +60,14 @@ class Settings(BaseSettings):
         if isinstance(v, str):
             return [s.strip() for s in v.split(",") if s.strip()]
         return v
+
+    @model_validator(mode="after")
+    def _validate_items_limits(self) -> Settings:
+        if self.items_default_limit < 1:
+            raise ValueError("items_default_limit must be >= 1")
+        if self.items_max_limit < self.items_default_limit:
+            raise ValueError("items_max_limit must be >= items_default_limit")
+        return self
 
     @cached_property
     def resolved_roots(self) -> dict[str, Path]:  # type: ignore[override]
