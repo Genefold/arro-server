@@ -390,6 +390,118 @@ class TestAdapterItems:
         assert len(result["items"][0]) == NFEATURES
 
 
+class TestAdapterGetItems:
+    """get_items is the bounded window read — never a full-matrix call."""
+
+    def test_adapter_forwards_offset_and_limit(self, built_adapter):
+        page = built_adapter.get_items("test/ds", offset=4, limit=2)
+        assert [it["row_index"] for it in page.items] == [4, 5]
+        assert page.offset == 4
+        assert page.limit == 2
+
+    def test_adapter_returns_has_more(self, built_adapter):
+        assert built_adapter.get_items("test/ds", offset=0, limit=2).has_more is True
+        assert built_adapter.get_items("test/ds", offset=8, limit=2).has_more is False
+
+    def test_adapter_returns_total_from_metadata(self, built_adapter):
+        page = built_adapter.get_items("test/ds", offset=0, limit=2)
+        assert page.total == NITEMS
+
+    def test_adapter_handles_empty_page(self, built_adapter):
+        page = built_adapter.get_items("test/ds", offset=NITEMS, limit=5)
+        assert page.items == []
+        assert page.has_more is False
+        assert page.offset == NITEMS
+
+    def test_adapter_enforces_window_budget(self, built_adapter):
+        from arro_server.errors import WindowValidationError
+        from arro_server.settings import get_settings
+
+        with pytest.raises(WindowValidationError):
+            built_adapter.get_items("test/ds", offset=-1, limit=2)
+        with pytest.raises(WindowValidationError):
+            built_adapter.get_items("test/ds", offset=0, limit=0)
+        with pytest.raises(WindowValidationError):
+            built_adapter.get_items("test/ds", offset=0, limit=get_settings().items_max_limit + 1)
+
+    def test_adapter_rejects_items_limit_above_items_max_limit(self, built_adapter):
+        from arro_server.errors import WindowValidationError
+        from arro_server.settings import get_settings
+
+        settings = get_settings()
+        with pytest.raises(WindowValidationError):
+            built_adapter.get_items("test/ds", offset=0, limit=settings.items_max_limit + 1)
+        # The tighter items cap wins over the looser global /data cap.
+        with pytest.raises(WindowValidationError):
+            built_adapter.get_items("test/ds", offset=0, limit=settings.max_window)
+
+    def test_adapter_rechecks_limits_when_called_directly(self, built_adapter):
+        """Adapter validates even when the route never saw the request."""
+        from arro_server.errors import WindowValidationError
+        from arro_server.settings import get_settings
+
+        with pytest.raises(WindowValidationError):
+            built_adapter.get_items("test/ds", offset=0, limit=get_settings().items_max_limit + 1)
+
+    def test_adapter_never_calls_get_all_items(self, built_adapter):
+        aspace = built_adapter._cache.get("test/ds").aspace
+        aspace.get_all_items.side_effect = AssertionError("unbounded read forbidden")
+        page = built_adapter.get_items("test/ds", offset=0, limit=50)
+        assert len(page.items) <= 50
+        aspace.get_all_items.assert_not_called()
+
+    def test_adapter_reads_exact_requested_indices(self, built_adapter, tmp_path):
+        """get_item must be called exactly once per requested row, in order."""
+        large = np.arange(120 * NFEATURES, dtype=np.float64).reshape(120, NFEATURES)
+        built_adapter.build_index("test/large", large.copy(), tmp_path)
+        # The fake aspace singleton only knows the 10-row fixture — rebind it.
+        entry = built_adapter._cache.get("test/large")
+        entry.nitems = 120
+        aspace = entry.aspace
+
+        calls: list[int] = []
+
+        def spy(idx):
+            calls.append(idx)
+            return large[idx]
+
+        aspace.get_item = spy
+        built_adapter.get_items("test/large", offset=20, limit=5)
+        assert calls == [20, 21, 22, 23, 24]
+
+    def test_adapter_truncates_at_dataset_end(self, built_adapter):
+        page = built_adapter.get_items("test/ds", offset=NITEMS - 2, limit=5)
+        assert [item["row_index"] for item in page.items] == [NITEMS - 2, NITEMS - 1]
+        assert page.has_more is False
+
+    def test_adapter_default_limit_pages_large_dataset(self, built_adapter, tmp_path):
+        """120-row dataset: default 50 yields two full pages + short tail."""
+        from arro_server.settings import get_settings
+
+        large = np.arange(120 * NFEATURES, dtype=np.float64).reshape(120, NFEATURES)
+        built_adapter.build_index("test/large", large.copy(), tmp_path)
+        # The fake aspace singleton only knows the 10-row fixture — rebind it
+        # to the large array for this index entry.
+        entry = built_adapter._cache.get("test/large")
+        entry.nitems = 120
+        entry.aspace.get_item = lambda idx: large[idx]
+        default_limit = get_settings().items_default_limit
+
+        page = built_adapter.get_items("test/large", offset=0, limit=default_limit)
+        assert len(page.items) == default_limit
+        assert page.has_more is True
+
+        page2 = built_adapter.get_items("test/large", offset=100, limit=default_limit)
+        assert [it["row_index"] for it in page2.items] == list(range(100, 120))
+        assert page2.has_more is False
+
+    def test_get_items_requires_index(self, adapter):
+        from arro_server.errors import MetadataUnavailable
+
+        with pytest.raises(MetadataUnavailable):
+            adapter.get_items("missing/ds", offset=0, limit=1)
+
+
 class TestAdapterSearch:
     """search / search_batch / search_energy / search_hybrid / search_linear_sorted."""
 
@@ -703,18 +815,116 @@ class TestItemRetrieval:
         body = r.json()
         assert body["vector"] == [float(v) for v in FIXTURE_ARRAY[0]]
 
-    def test_get_all_items_200(self, built_client: TestClient):
+    def test_get_items_default_page_200(self, built_client: TestClient):
         r = built_client.get(f"/api/datasets/{DATASET_ID}/items")
         assert r.status_code == 200
         body = r.json()
         assert body["id"] == DATASET_ID
-        assert body["nitems"] == NITEMS
+        assert body["offset"] == 0
+        assert body["limit"] == 50
+        assert body["count"] == NITEMS
+        assert body["has_more"] is False
+        assert body["total"] == NITEMS
         assert len(body["items"]) == NITEMS
-        assert len(body["items"][0]) == NFEATURES
+        assert set(body["items"][0]) == {"row_index", "vector"}
+        assert len(body["items"][0]["vector"]) == NFEATURES
 
     def test_get_item_no_index_returns_error(self, live_client: TestClient):
         r = live_client.get(f"/api/datasets/{DATASET_ID}/items/0")
         assert r.status_code in {404, 503}
+
+
+class TestItemsPagination:
+    """GET /items is bounded: offset/limit validated, window never exceeds max."""
+
+    def test_items_default_window(self, built_client: TestClient):
+        body = built_client.get(f"/api/datasets/{DATASET_ID}/items").json()
+        assert body["offset"] == 0
+        assert body["limit"] == 50
+        assert body["count"] == NITEMS
+        assert body["has_more"] is False
+
+    def test_items_accepts_valid_offset_and_limit(self, built_client: TestClient):
+        r = built_client.get(f"/api/datasets/{DATASET_ID}/items?offset=3&limit=2")
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert [it["row_index"] for it in body["items"]] == [3, 4]
+        assert body["has_more"] is True
+        assert body["total"] == NITEMS
+
+    def test_items_rejects_negative_offset(self, built_client: TestClient):
+        r = built_client.get(f"/api/datasets/{DATASET_ID}/items?offset=-1")
+        assert r.status_code == 422
+
+    def test_items_rejects_zero_limit(self, built_client: TestClient):
+        r = built_client.get(f"/api/datasets/{DATASET_ID}/items?limit=0")
+        assert r.status_code == 422
+
+    def test_items_rejects_negative_limit(self, built_client: TestClient):
+        r = built_client.get(f"/api/datasets/{DATASET_ID}/items?limit=-1")
+        assert r.status_code == 422
+
+    def test_items_max_limit_is_accepted(self, built_client: TestClient):
+        from arro_server.settings import get_settings
+
+        r = built_client.get(
+            f"/api/datasets/{DATASET_ID}/items",
+            params={"limit": get_settings().items_max_limit},
+        )
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["limit"] == get_settings().items_max_limit
+        assert body["count"] == NITEMS  # truncated at dataset end
+
+    def test_items_above_items_max_limit_is_rejected(self, built_client: TestClient):
+        from arro_server.settings import get_settings
+
+        r = built_client.get(
+            f"/api/datasets/{DATASET_ID}/items",
+            params={"limit": get_settings().items_max_limit + 1},
+        )
+        assert r.status_code == 422
+
+    def test_global_max_window_does_not_expand_items_limit(self, built_client: TestClient):
+        from arro_server.settings import get_settings
+
+        r = built_client.get(
+            f"/api/datasets/{DATASET_ID}/items",
+            params={"limit": get_settings().max_window},
+        )
+        assert r.status_code == 422
+
+    def test_items_rejects_non_integer_offset(self, built_client: TestClient):
+        r = built_client.get(f"/api/datasets/{DATASET_ID}/items?offset=abc")
+        assert r.status_code == 422
+
+    def test_items_rejects_decimal_offset(self, built_client: TestClient):
+        r = built_client.get(f"/api/datasets/{DATASET_ID}/items?offset=1.5")
+        assert r.status_code == 422
+
+    def test_items_returns_empty_page_after_dataset(self, built_client: TestClient):
+        r = built_client.get(f"/api/datasets/{DATASET_ID}/items?offset=999999999")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["items"] == []
+        assert body["count"] == 0
+        assert body["has_more"] is False
+
+    def test_items_window_never_exceeds_limit(self, built_client: TestClient):
+        """aspace.get_item must only be called for indices inside the window."""
+        from arro_server.arrowspace_adapter import load
+
+        entry = load()._cache.get(DATASET_ID)
+        calls: list[int] = []
+        original = entry.aspace.get_item
+
+        def spy(idx):
+            calls.append(idx)
+            return original(idx)
+
+        entry.aspace.get_item = spy
+        built_client.get(f"/api/datasets/{DATASET_ID}/items?offset=2&limit=3")
+        assert calls == [2, 3, 4]
 
 
 # ===========================================================================

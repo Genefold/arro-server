@@ -40,3 +40,19 @@ def test_collision_suffix(monkeypatch, tmp_path: Path) -> None:
     labels = list(s.resolved_roots.keys())
     assert "shared" in labels
     assert any(name.startswith("shared-") for name in labels)
+
+
+def test_items_limit_defaults() -> None:
+    s = Settings()
+    assert s.items_default_limit == 50
+    assert s.items_max_limit == 100
+
+
+def test_items_limit_validation_rejects_inconsistent_settings() -> None:
+    import pytest
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        Settings(items_default_limit=0)
+    with pytest.raises(ValidationError):
+        Settings(items_default_limit=200, items_max_limit=100)

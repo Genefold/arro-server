@@ -57,3 +57,27 @@ def test_budget_enforced() -> None:
 def test_offset_clamped_past_end() -> None:
     rs = parse_slice(None, (10,), offset=20, limit=5)
     assert rs.out_shape == (0,)
+
+
+def test_items_window_rejects_offset_near_safe_boundary() -> None:
+    from arro_server.errors import WindowValidationError
+    from arro_server.slicing import MAX_SAFE_OFFSET, enforce_items_window
+
+    with pytest.raises(WindowValidationError):
+        enforce_items_window(offset=MAX_SAFE_OFFSET - 50, limit=100, max_window=100)
+
+
+def test_items_window_accepts_large_but_safe_offset() -> None:
+    from arro_server.slicing import MAX_SAFE_OFFSET, enforce_items_window
+
+    enforce_items_window(offset=MAX_SAFE_OFFSET - 200, limit=100, max_window=100)
+
+
+def test_items_window_rejects_bad_limit() -> None:
+    from arro_server.errors import WindowValidationError
+    from arro_server.slicing import enforce_items_window
+
+    with pytest.raises(WindowValidationError):
+        enforce_items_window(offset=0, limit=0, max_window=100)
+    with pytest.raises(WindowValidationError):
+        enforce_items_window(offset=-1, limit=5, max_window=100)

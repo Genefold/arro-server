@@ -52,6 +52,13 @@ class OptionalDependencyMissing(Exception):
         self.feature = feature
 
 
+class WindowValidationError(HTTPException):
+    """Raised when an offset/limit window violates its bounds."""
+
+    def __init__(self, msg: str) -> None:
+        super().__init__(status_code=422, detail=msg)
+
+
 class VectorShapeMismatch(HTTPException):
     """Raised when request vectors have wrong shape for the target dataset."""
 
