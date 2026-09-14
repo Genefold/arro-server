@@ -18,7 +18,7 @@ DELETE /api/datasets/{id}/index              -- delete index + purge files
 DELETE /api/datasets/{dataset_id}            -- delete dataset + index artefacts
 GET  /api/datasets/{id}/lambdas              -- eigenvalue distribution
 GET  /api/datasets/{id}/graph_laplacian      -- GL metadata
-GET  /api/datasets/{id}/items                -- all items from index
+GET  /api/datasets/{id}/items                -- bounded page of index items (offset/limit)
 GET  /api/datasets/{id}/items/{n}            -- single item
 POST /api/datasets/{id}/search               -- unified spectral vector search with mode selector
 POST /api/datasets/{id}/search/energy        -- energy vector search
@@ -52,7 +52,7 @@ from ..arrowspace_adapter import DEFAULT_GRAPH_PARAMS, ArrowSpaceAdapter
 from ..arrowspace_adapter import load as load_arrowspace
 from ..errors import DatasetNotSliceable, InvalidSlice, OptionalDependencyMissing
 from ..settings import Settings, get_settings
-from ..slicing import enforce_window_budget, parse_slice, trailing_product
+from ..slicing import enforce_items_window, enforce_window_budget, parse_slice, trailing_product
 from ..storage import StorageRegistry, get_registry
 from ..storage.zarr_fs import zarr_available
 from .schemas import (
@@ -827,10 +827,34 @@ def dataset_graph_laplacian(
 @router.get("/datasets/{dataset_id:path}/items")
 def dataset_get_all_items(
     dataset_id: str,
+    offset: int = Query(default=0, ge=0),
+    limit: int | None = Query(default=None, ge=1),
     adapter: ArrowSpaceAdapter = Depends(_arrowspace),
+    settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
-    data = adapter.get_all_items(dataset_id)
-    return {"id": dataset_id, "backend": adapter.backend, **data}
+    """Return one bounded page of items from the ArrowSpace index.
+
+    Route-level window validation is the public API boundary; the adapter
+    re-checks the same bounds (internal safety boundary). Requesting
+    ``offset`` beyond the dataset returns 200 with an empty page.
+    """
+    effective_limit = limit if limit is not None else settings.items_default_limit
+    enforce_items_window(
+        offset=offset,
+        limit=effective_limit,
+        max_window=settings.max_window,
+    )
+    page = adapter.get_items(dataset_id, offset=offset, limit=effective_limit)
+    return {
+        "id": dataset_id,
+        "backend": adapter.backend,
+        "items": page.items,
+        "offset": page.offset,
+        "limit": page.limit,
+        "count": len(page.items),
+        "has_more": page.has_more,
+        "total": page.total,
+    }
 
 
 @router.get("/datasets/{dataset_id:path}/items/{item_index}")

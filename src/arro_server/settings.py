@@ -36,7 +36,11 @@ class Settings(BaseSettings):
     # max_window: hard cap on the number of *rows* (leading-axis elements)
     # returned in a single /data or /slice response. Note that for N-D arrays
     # the total element count is max_window * product(shape[1:]).
+    # Also caps ?limit on /datasets/{id}/items.
     max_window: int = 10_000
+    # items_default_limit: rows returned by /datasets/{id}/items when ?limit
+    # is omitted.
+    items_default_limit: int = 50
     serve_frontend: bool = True
     frontend_dir: str | None = None
     # Directory where graph-Laplacian Zarr arrays are persisted.

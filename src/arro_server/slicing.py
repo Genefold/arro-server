@@ -133,6 +133,33 @@ def enforce_window_budget(rs: ResolvedSlice, max_elements: int) -> None:
         )
 
 
+MAX_SAFE_OFFSET = 2**63 - 1
+
+
+def enforce_items_window(*, offset: int, limit: int, max_window: int) -> None:
+    """Validate an offset/limit window for the items endpoint.
+
+    Canonical validation shared by the route (public boundary) and the
+    adapter (internal boundary — callers are never trusted). Raises
+    ``WindowValidationError`` (HTTP 422).
+
+    Offsets beyond the dataset are NOT rejected here — they yield an empty
+    page. Only values that cannot safely pass through the stack are.
+    """
+    from .errors import WindowValidationError
+
+    if offset < 0:
+        raise WindowValidationError("offset must be >= 0")
+    if limit < 1:
+        raise WindowValidationError("limit must be >= 1")
+    if limit > max_window:
+        raise WindowValidationError(f"limit must be <= {max_window}")
+    if offset > MAX_SAFE_OFFSET:
+        raise WindowValidationError("offset is too large")
+    if offset + limit < offset:
+        raise WindowValidationError("offset and limit overflow")
+
+
 def trailing_product(shape: tuple[int, ...]) -> int:
     """Product of all axes except the leading one. Returns 1 for 1-D arrays."""
     if len(shape) <= 1:

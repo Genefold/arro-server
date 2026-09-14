@@ -82,6 +82,8 @@ import polars as pl
 from fastapi import HTTPException
 
 from .errors import MetadataUnavailable, OptionalDependencyMissing
+from .settings import get_settings
+from .slicing import enforce_items_window
 
 log = logging.getLogger(__name__)
 
@@ -96,6 +98,20 @@ DEFAULT_GRAPH_PARAMS: dict[str, Any] = {
 DEFAULT_SEARCH_K: int = 10
 
 MANIFEST_FILENAME = "index_manifest.json"
+
+
+@dataclass(frozen=True)
+class ItemsPage:
+    """One bounded page of items. ``items`` holds only the returned window.
+
+    ``total`` comes from index metadata (nitems) — never a full scan.
+    """
+
+    items: list[dict[str, Any]]
+    offset: int
+    limit: int
+    has_more: bool
+    total: int | None = None
 
 # Protects the read→modify→write cycle on index_manifest.json.
 # All accesses to _read_manifest + _write_manifest in build_index and
@@ -146,6 +162,17 @@ class ArrowSpaceAdapter(ABC):
 
     @abstractmethod
     def search(self, dataset_id: str, query: dict[str, Any]) -> dict[str, Any]: ...
+
+    @abstractmethod
+    def get_item(self, dataset_id: str, idx: int) -> dict[str, Any]: ...
+
+    @abstractmethod
+    def get_items(self, dataset_id: str, *, offset: int, limit: int) -> ItemsPage:
+        """Return one bounded page of items (never the full matrix)."""
+        ...
+
+    @abstractmethod
+    def get_all_items(self, dataset_id: str) -> dict[str, Any]: ...
 
     @abstractmethod
     def search_batch(self, dataset_id: str, query: dict[str, Any]) -> dict[str, Any]: ...
@@ -267,6 +294,9 @@ class _SidecarAdapter(ArrowSpaceAdapter):
     def get_item(self, dataset_id: str, idx: int) -> dict[str, Any]:
         raise OptionalDependencyMissing("arrowspace", "get_item")
 
+    def get_items(self, dataset_id: str, *, offset: int, limit: int) -> ItemsPage:
+        raise OptionalDependencyMissing("arrowspace", "get_items")
+
     def get_all_items(self, dataset_id: str) -> dict[str, Any]:
         raise OptionalDependencyMissing("arrowspace", "get_all_items")
 
@@ -348,6 +378,9 @@ class _UnavailableAdapter(ArrowSpaceAdapter):
 
     def get_item(self, dataset_id, idx):
         raise OptionalDependencyMissing("arrowspace", "get_item")
+
+    def get_items(self, dataset_id, *, offset, limit):
+        raise OptionalDependencyMissing("arrowspace", "get_items")
 
     def get_all_items(self, dataset_id):
         raise OptionalDependencyMissing("arrowspace", "get_all_items")
@@ -975,6 +1008,38 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
             "nitems": entry.nitems,
             "items": [[float(v) for v in row] for row in items],
         }
+
+    def get_items(self, dataset_id: str, *, offset: int, limit: int) -> ItemsPage:
+        """Return a bounded window of items, O(limit) memory.
+
+        ArrowSpace (0.26.x) has no row-window API — only get_item(i) and
+        get_all_items(). We therefore loop get_item() over the requested
+        window so only ``limit`` rows are materialized; the full matrix is
+        never converted to Python lists.
+
+        has_more/total come from entry.nitems (metadata, no I/O).
+        """
+        enforce_items_window(
+            offset=offset,
+            limit=limit,
+            max_window=get_settings().max_window,
+        )
+        entry = self._get_entry(dataset_id)
+        end = min(offset + limit, entry.nitems)
+        items = []
+        for i in range(offset, end):
+            raw = entry.aspace.get_item(i)
+            # arrowspace >= 0.26 returns (vector, energy) tuples; older builds
+            # return the bare row.
+            vec = raw[0] if isinstance(raw, tuple) else raw
+            items.append({"row_index": i, "vector": [float(v) for v in vec]})
+        return ItemsPage(
+            items=items,
+            offset=offset,
+            limit=limit,
+            has_more=offset + limit < entry.nitems,
+            total=entry.nitems,
+        )
 
     def search(self, dataset_id: str, query: dict[str, Any]) -> dict[str, Any]:
         entry = self._get_entry(dataset_id)
