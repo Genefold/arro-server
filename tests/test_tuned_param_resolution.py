@@ -142,17 +142,22 @@ class TestBuildIndexResolution:
 
     def test_manifest_records_resolved_params(self, fake_mod, tmp_path: Path):
         store = MagicMock()
-        store.get.return_value = make_tuned()
+        # sigma=None is allowed by the tuner contract; the manifest must record
+        # the substituted default bandwidth, never None (reload would pass it
+        # straight to load_arrowspace and fail).
+        store.get.return_value = make_tuned(sigma=None)
         adapter = _ArrowSpaceAdapter(fake_mod, cache_size=1, tune_store=store)
         adapter.build_index(DATASET_ID, np.zeros((4, 3)), tmp_path)
+        expected_sigma = DEFAULT_GRAPH_PARAMS["sigma"]
         manifest = json.loads((tmp_path / MANIFEST_FILENAME).read_text())
         assert manifest[DATASET_ID]["graph_params"] == {
             "eps": 1.1,
             "k": 20,
             "topk": 15,
             "p": 1.9,
-            "sigma": 0.7,
+            "sigma": expected_sigma,
         }
+        assert fake_mod.captured["graph_params"]["sigma"] == expected_sigma
 
     def test_manifest_records_user_params_as_given(self, fake_mod, tmp_path: Path):
         store = MagicMock()
