@@ -15,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from . import __version__
 from .api import admin_router
 from .api import router as api_router
+from .api.tune_router import router as tune_router
 from .errors import MetadataUnavailable, OptionalDependencyMissing
 from .settings import Settings, get_settings
 from .storage.tune_store import TuneStore
@@ -92,6 +93,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.include_router(api_router)
     app.include_router(admin_router)
+    app.include_router(tune_router)
 
     @app.exception_handler(MetadataUnavailable)
     async def _metadata_unavailable_handler(

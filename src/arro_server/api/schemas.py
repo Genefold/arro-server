@@ -397,6 +397,19 @@ class TunedParamsSchema(BaseModel):
         return self
 
 
+class TuneStartResponse(BaseModel):
+    """Response for POST /datasets/{id}/tune (202 Accepted).
+
+    Attributes:
+        dataset: Dataset ID the request targeted.
+        status:  'started' — a new job was launched.
+                 'running' — a job was already in progress (idempotent no-op).
+    """
+
+    dataset: str
+    status: Literal["started", "running"]
+
+
 class TuneStatusResponse(BaseModel):
     """Response for GET /datasets/{id}/tune/status.
 
