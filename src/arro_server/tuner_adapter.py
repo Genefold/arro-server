@@ -9,6 +9,7 @@ Design rules:
 - All exceptions from the tuner are caught and logged; they never propagate
   to callers of launch().
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -111,13 +112,9 @@ class TunerAdapter:
         logger.info("Tuning started for dataset %r (n_trials=%d).", dataset, request.n_trials)
         loop = asyncio.get_running_loop()
         try:
-            result: TuneResult = await loop.run_in_executor(
-                None, run_tuning, request
-            )
+            result: TuneResult = await loop.run_in_executor(None, run_tuning, request)
         except Exception as exc:
-            logger.exception(
-                "Unexpected error while tuning dataset %r: %s", dataset, exc
-            )
+            logger.exception("Unexpected error while tuning dataset %r: %s", dataset, exc)
             return
         finally:
             self._running.pop(dataset, None)
@@ -135,9 +132,7 @@ class TunerAdapter:
             params = _result_to_tuned_params(dataset, result)
             self._store.set(dataset, params)
         except Exception as exc:
-            logger.exception(
-                "Failed to persist tuning result for dataset %r: %s", dataset, exc
-            )
+            logger.exception("Failed to persist tuning result for dataset %r: %s", dataset, exc)
             return
 
         logger.info(
