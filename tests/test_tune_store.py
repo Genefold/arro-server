@@ -203,3 +203,32 @@ class TestTuneStoreConcurrency:
 
         assert not errors
         assert len(store.all()) == 5
+
+    def test_concurrent_read_write_does_not_raise(self, tmp_path):
+        path = tmp_path / "tune.json"
+        store = TuneStore(path)
+        store.set("mnist", make_params("mnist"))
+        errors: list[Exception] = []
+
+        def reader() -> None:
+            try:
+                for _ in range(30):
+                    store.get("mnist")
+            except Exception as exc:
+                errors.append(exc)
+
+        def writer() -> None:
+            try:
+                for i in range(30):
+                    store.set("mnist", make_params("mnist", score=0.5 + i * 0.01))
+            except Exception as exc:
+                errors.append(exc)
+
+        threads = [threading.Thread(target=reader) for _ in range(3)] + [
+            threading.Thread(target=writer) for _ in range(2)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        assert not errors

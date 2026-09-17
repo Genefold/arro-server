@@ -57,16 +57,21 @@ class TunedParams:
 
     @classmethod
     def from_dict(cls, data: dict) -> TunedParams:
-        return cls(
-            eps=float(data["eps"]),
-            k=int(data["k"]),
-            topk=int(data["topk"]),
-            p=float(data["p"]),
-            sigma=float(data["sigma"]) if data["sigma"] is not None else None,
-            score=float(data["score"]),
-            tuned_at=str(data["tuned_at"]),
-            dataset=str(data["dataset"]),
-        )
+        try:
+            return cls(
+                eps=float(data["eps"]),
+                k=int(data["k"]),
+                topk=int(data["topk"]),
+                p=float(data["p"]),
+                sigma=float(data["sigma"]) if data["sigma"] is not None else None,
+                score=float(data["score"]),
+                tuned_at=str(data["tuned_at"]),
+                dataset=str(data["dataset"]),
+            )
+        except KeyError as exc:
+            raise ValueError(
+                f"TunedParams missing required field: {exc}"
+            ) from exc
 
     def to_graph_params(self) -> dict:
         """Return a dict ready for pyarrowspace.ArrowSpaceBuilder.with_lambda_graph()."""
@@ -87,7 +92,8 @@ class TuneStore:
 
     def get(self, dataset: str) -> TunedParams | None:
         """Return TunedParams for *dataset*, or None if not found."""
-        raw = self._load().get(dataset)
+        with self._lock:
+            raw = self._load().get(dataset)
         return TunedParams.from_dict(raw) if raw is not None else None
 
     def set(self, dataset: str, params: TunedParams) -> None:
@@ -113,7 +119,9 @@ class TuneStore:
 
     def all(self) -> dict[str, TunedParams]:
         """Return all stored params as {dataset: TunedParams}."""
-        return {k: TunedParams.from_dict(v) for k, v in self._load().items()}
+        with self._lock:
+            data = self._load()
+        return {k: TunedParams.from_dict(v) for k, v in data.items()}
 
     def _load(self) -> dict:
         if not self._path.exists():
