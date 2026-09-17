@@ -19,6 +19,8 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
+from arro_server import settings as settings_mod
+
 
 @pytest.fixture
 def client(configured_app):
@@ -82,6 +84,31 @@ def test_data_pagination_terminates(client: TestClient) -> None:
     body = r.json()
     assert body["next_offset"] is None
     assert len(body["data"]["rows"]) == 5
+
+
+def test_data_response_element_cap_400(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Element-count guard rejects requests whose rows*width exceed the cap."""
+    monkeypatch.setenv("ARRO_SERVER_MAX_RESPONSE_ELEMENTS", "100")
+    settings_mod.reset_settings_cache()
+    # (50, 4) matrix: limit=50 -> 200 elements > cap of 100.
+    r = client.get("/api/datasets/main--matrix/data?offset=0&limit=50")
+    assert r.status_code == 400
+    assert "ARRO_SERVER_MAX_RESPONSE_ELEMENTS" in r.json()["detail"]
+
+
+def test_data_response_element_cap_narrow_ok(client: TestClient) -> None:
+    """Default cap leaves normal requests untouched (200 elements < 1M)."""
+    r = client.get("/api/datasets/main--matrix/data?offset=0&limit=50")
+    assert r.status_code == 200
+
+
+def test_slice_response_element_cap_400(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The /slice endpoint enforces the same element cap."""
+    monkeypatch.setenv("ARRO_SERVER_MAX_RESPONSE_ELEMENTS", "100")
+    settings_mod.reset_settings_cache()
+    r = client.get("/api/datasets/main--matrix/slice?slice=0:50,:")
+    assert r.status_code == 400
+    assert "ARRO_SERVER_MAX_RESPONSE_ELEMENTS" in r.json()["detail"]
 
 
 def test_slice(client: TestClient) -> None:

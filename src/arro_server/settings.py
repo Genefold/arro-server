@@ -37,6 +37,11 @@ class Settings(BaseSettings):
     # returned in a single /data or /slice response. Note that for N-D arrays
     # the total element count is max_window * product(shape[1:]).
     max_window: int = 10_000
+    # max_response_elements: hard cap on the *total scalar element count*
+    # returned in a single /data or /slice response, regardless of row count.
+    # Prevents OOM on wide datasets (e.g. 384-dim embeddings) where the row
+    # budget alone is insufficient.
+    max_response_elements: int = 1_000_000
     # items_default_limit: rows returned by /datasets/{id}/items when ?limit
     # is omitted.
     items_default_limit: int = 50
