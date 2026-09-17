@@ -38,7 +38,7 @@ class TunedParams:
             raise ValueError(f"eps must be > 0, got {self.eps}")
         if self.p <= 0:
             raise ValueError(f"p must be > 0, got {self.p}")
-        if self.sigma <= 0:
+        if self.sigma is None or self.sigma <= 0:
             raise ValueError(f"sigma must be > 0, got {self.sigma}")
         if not isinstance(self.score, (int, float)):
             raise TypeError(f"score must be numeric, got {type(self.score)}")
