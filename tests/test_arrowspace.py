@@ -1074,7 +1074,7 @@ class TestSidecarFallback:
 
         original_load = arrowspace_adapter.load
 
-        def patched_load():
+        def patched_load(tune_store=None):
             return arrowspace_adapter._SidecarAdapter()
 
         arrowspace_adapter.load = patched_load  # type: ignore[assignment]

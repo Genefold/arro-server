@@ -84,6 +84,7 @@ from fastapi import HTTPException
 from .errors import MetadataUnavailable, OptionalDependencyMissing
 from .settings import get_settings
 from .slicing import enforce_items_window
+from .storage.tune_store import TuneStore
 
 log = logging.getLogger(__name__)
 
@@ -576,14 +577,43 @@ def _cleanup_files(files: set[Path]) -> None:
 
 
 class _ArrowSpaceAdapter(ArrowSpaceAdapter):
-    def __init__(self, module: Any, cache_size: int = 8) -> None:
+    def __init__(
+        self,
+        module: Any,
+        cache_size: int = 8,
+        tune_store: TuneStore | None = None,
+    ) -> None:
         super().__init__(available=True, backend="arrowspace")
         self._mod = module
         self._cache = _LRUIndexCache(maxsize=cache_size)
+        self._tune_store = tune_store
 
     @staticmethod
     def _slug(dataset_id: str) -> str:
         return dataset_id.replace("/", "__").replace("\\", "__")
+
+    def _resolve_graph_params(
+        self,
+        dataset_id: str,
+        user_params: dict[str, Any] | None,
+    ) -> tuple[dict[str, Any], str]:
+        """Resolve graph params: user_params > TuneStore > DEFAULT_GRAPH_PARAMS.
+
+        Returns ``(params, source)`` with source in {'user', 'tuned', 'default'};
+        used for logging only.  User params always win and are never merged.
+        """
+        if user_params is not None:
+            return user_params, "user"
+        if self._tune_store is not None:
+            tuned = self._tune_store.get(dataset_id)
+            if tuned is not None:
+                gp = tuned.to_graph_params()
+                # ponytail: tuner contract allows sigma=None, but the Rust
+                # builder needs a float — fall back to the default bandwidth.
+                if gp.get("sigma") is None:
+                    gp["sigma"] = DEFAULT_GRAPH_PARAMS["sigma"]
+                return gp, "tuned"
+        return DEFAULT_GRAPH_PARAMS, "default"
 
     @staticmethod
     def _new_dataset_name(slug: str) -> str:
@@ -894,7 +924,8 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
         index_store: Path,
         graph_params: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        gp = graph_params or DEFAULT_GRAPH_PARAMS
+        gp, param_source = self._resolve_graph_params(dataset_id, graph_params)
+        log.debug("build_index '%s': using %s graph_params=%s", dataset_id, param_source, gp)
         arr64 = np.asarray(array, dtype=np.float64)
         if arr64.ndim != 2:
             raise ValueError(
@@ -1274,12 +1305,15 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
 
 
 @lru_cache(maxsize=1)
-def load() -> ArrowSpaceAdapter:
+def load(tune_store: TuneStore | None = None) -> ArrowSpaceAdapter:
     """Return the best available ArrowSpace adapter.
 
     Priority:
     1. arrowspace package importable  -> _ArrowSpaceAdapter
     2. fallback                       -> _SidecarAdapter
+
+    ``tune_store`` (from the DI layer) enables tuned-param resolution in
+    ``build_index``; when omitted the adapter falls back to defaults.
 
     FIX: broadened except to catch Exception (not just ImportError) because
     the installed arrowspace package raises NameError in __init__.py when its
@@ -1292,7 +1326,7 @@ def load() -> ArrowSpaceAdapter:
 
         cache_size = get_settings().index_cache_size
         log.info("arrowspace package found; using live adapter (cache_size=%d)", cache_size)
-        return _ArrowSpaceAdapter(_mod, cache_size=cache_size)
+        return _ArrowSpaceAdapter(_mod, cache_size=cache_size, tune_store=tune_store)
     except Exception:
         log.info("arrowspace package not available; using sidecar adapter")
         return _SidecarAdapter()

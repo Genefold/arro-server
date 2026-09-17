@@ -45,7 +45,7 @@ import asyncio
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 
 from .. import __version__
 from ..arrowspace_adapter import DEFAULT_GRAPH_PARAMS, ArrowSpaceAdapter
@@ -196,6 +196,7 @@ def _require_admin_token(
 
 @admin_router.post("/reload", dependencies=[Depends(_require_admin_token)])
 async def admin_reload(
+    request: Request,
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
     """Invalidate all LRU caches and re-scan data_roots.
@@ -214,7 +215,7 @@ async def admin_reload(
     # TODO(multi-worker): replace asyncio.to_thread with ARQ/Celery task
     datasets = await asyncio.to_thread(registry.list_datasets)
 
-    new_adapter = load_adapter()
+    new_adapter = load_adapter(getattr(request.app.state, "tune_store", None))
     index_store = Path(settings.index_store).expanduser().resolve()
     try:
         # TODO(multi-worker): replace asyncio.to_thread with ARQ/Celery task
