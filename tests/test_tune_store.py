@@ -56,9 +56,9 @@ class TestTunedParamsValidation:
         with pytest.raises(ValueError, match="sigma"):
             make_params(sigma=0.0)
 
-    def test_sigma_none_invalid(self):
-        with pytest.raises(ValueError, match="sigma"):
-            make_params(sigma=None)  # type: ignore
+    def test_sigma_none_allowed(self):
+        # sigma=None is a valid tuner outcome (no RBF bandwidth chosen)
+        assert make_params(sigma=None).sigma is None
 
     def test_p_zero_invalid(self):
         with pytest.raises(ValueError, match="p must be"):

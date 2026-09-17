@@ -22,7 +22,7 @@ class TunedParams:
     k: int          # lambda-graph neighbour count
     topk: int       # retrieval neighbour count at query time
     p: float        # Minkowski p-norm
-    sigma: float    # RBF kernel bandwidth
+    sigma: float | None  # RBF kernel bandwidth (None allowed per tuner contract)
     score: float    # tuning objective score (e.g. recall@k)
     tuned_at: str   # ISO 8601 UTC timestamp
     dataset: str    # dataset key
@@ -38,7 +38,7 @@ class TunedParams:
             raise ValueError(f"eps must be > 0, got {self.eps}")
         if self.p <= 0:
             raise ValueError(f"p must be > 0, got {self.p}")
-        if self.sigma is None or self.sigma <= 0:
+        if self.sigma is not None and self.sigma <= 0:
             raise ValueError(f"sigma must be > 0, got {self.sigma}")
         if not isinstance(self.score, (int, float)):
             raise TypeError(f"score must be numeric, got {type(self.score)}")
@@ -62,7 +62,7 @@ class TunedParams:
             k=int(data["k"]),
             topk=int(data["topk"]),
             p=float(data["p"]),
-            sigma=float(data["sigma"]),
+            sigma=float(data["sigma"]) if data["sigma"] is not None else None,
             score=float(data["score"]),
             tuned_at=str(data["tuned_at"]),
             dataset=str(data["dataset"]),
