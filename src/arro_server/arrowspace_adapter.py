@@ -198,6 +198,15 @@ class ArrowSpaceAdapter(ABC):
     @abstractmethod
     def search_with_mode(self, dataset_id: str, query: dict[str, Any]) -> dict[str, Any]: ...
 
+    @abstractmethod
+    def graph_laplacian_info(self, dataset_id: str) -> dict[str, Any]: ...
+
+    @abstractmethod
+    def manifold_data(self, dataset_id: str) -> dict[str, Any]: ...
+
+    @abstractmethod
+    def stats_data(self, dataset_id: str) -> dict[str, Any]: ...
+
 
 # ---------------------------------------------------------------------------
 # Sidecar JSON adapter
@@ -291,6 +300,12 @@ class _SidecarAdapter(ArrowSpaceAdapter):
 
     def graph_laplacian_info(self, dataset_id: str) -> dict[str, Any]:
         raise OptionalDependencyMissing("arrowspace", "graph_laplacian_info")
+
+    def manifold_data(self, dataset_id: str) -> dict[str, Any]:
+        raise OptionalDependencyMissing("arrowspace", "manifold_data")
+
+    def stats_data(self, dataset_id: str) -> dict[str, Any]:
+        raise OptionalDependencyMissing("arrowspace", "stats_data")
 
     def get_item(self, dataset_id: str, idx: int) -> dict[str, Any]:
         raise OptionalDependencyMissing("arrowspace", "get_item")
@@ -418,6 +433,12 @@ class _UnavailableAdapter(ArrowSpaceAdapter):
 
     def search_with_mode(self, dataset_id, query):
         raise OptionalDependencyMissing("arrowspace", "search_with_mode")
+
+    def manifold_data(self, dataset_id):
+        raise OptionalDependencyMissing("arrowspace", "manifold_data")
+
+    def stats_data(self, dataset_id):
+        raise OptionalDependencyMissing("arrowspace", "stats_data")
 
 
 # ---------------------------------------------------------------------------

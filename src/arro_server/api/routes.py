@@ -711,7 +711,7 @@ def dataset_stats(
     h = reg.open(dataset_id)
     # Use has_index() instead of reaching into _cache directly (encapsulation)
     if adapter.has_index(dataset_id):
-        stats = adapter.stats_data(dataset_id)  # type: ignore[attr-defined]
+        stats = adapter.stats_data(dataset_id)
         return {
             "id": dataset_id,
             "backend": adapter.backend,
@@ -748,7 +748,7 @@ def dataset_manifold(
     h = reg.open(dataset_id)
     # Use has_index() instead of reaching into _cache directly (encapsulation)
     if adapter.has_index(dataset_id):
-        data = adapter.manifold_data(dataset_id)  # type: ignore[attr-defined]
+        data = adapter.manifold_data(dataset_id)
         return {
             "id": dataset_id,
             "backend": adapter.backend,
