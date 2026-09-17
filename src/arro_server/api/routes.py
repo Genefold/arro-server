@@ -392,6 +392,7 @@ def vectors_append(
     dataset_id: str,
     body: VectorAppendRequest,
     reg: StorageRegistry = Depends(_registry),
+    adapter: ArrowSpaceAdapter = Depends(_arrowspace),
 ) -> VectorAppendResponse:
     """Append M new row-vectors to an existing 2-D Zarr array.
 
@@ -404,7 +405,8 @@ def vectors_append(
            so that concurrent reads see the correct shape immediately.
 
     Returns:
-        VectorAppendResponse with start_row, appended count, new_shape.
+        VectorAppendResponse with start_row, appended count, new_shape,
+        index_stale.
     """
     import numpy as np
 
@@ -422,12 +424,15 @@ def vectors_append(
     dtype = body.dtype if body.dtype else "float64"
     vecs = np.array(body.vectors, dtype=dtype)
 
+    index_stale = adapter.has_index(dataset_id)
+
     start_row, new_n = zarr_backend.append_vectors(dataset_id, vecs, registry=reg)
 
     return VectorAppendResponse(
         start_row=start_row,
         appended=int(vecs.shape[0]),
         new_shape=[new_n, int(vecs.shape[1])],
+        index_stale=index_stale,
     )
 
 
@@ -457,6 +462,7 @@ def vectors_overwrite(
     dataset_id: str,
     body: VectorOverwriteRequest,
     reg: StorageRegistry = Depends(_registry),
+    adapter: ArrowSpaceAdapter = Depends(_arrowspace),
 ) -> VectorOverwriteResponse:
     """Overwrite specific rows of an existing 2-D Zarr array.
 
@@ -471,8 +477,9 @@ def vectors_overwrite(
 
     Note:
         If an ArrowSpace index exists for this dataset, its in-memory
-        representation will not reflect the new vectors until the index
-        is rebuilt via POST /datasets/{id}/index.
+        representation will not reflect the new vectors until the index is
+        rebuilt via POST /datasets/{id}/index. The response field
+        ``index_stale`` signals this condition to the client.
     """
     from ..storage.base import decode_dataset_id
 
@@ -484,9 +491,11 @@ def vectors_overwrite(
             detail=f"Dataset '{dataset_id}' not found.",
         )
 
+    index_stale = adapter.has_index(dataset_id)
+
     dtype = body.dtype or "float64"
     overwritten = zarr_backend.overwrite_vectors(dataset_id, body.updates, dtype=dtype)
-    return VectorOverwriteResponse(overwritten=overwritten)
+    return VectorOverwriteResponse(overwritten=overwritten, index_stale=index_stale)
 
 
 # ---------------------------------------------------------------------------
@@ -702,7 +711,7 @@ def dataset_stats(
     h = reg.open(dataset_id)
     # Use has_index() instead of reaching into _cache directly (encapsulation)
     if adapter.has_index(dataset_id):
-        stats = adapter.stats_data(dataset_id)  # type: ignore[attr-defined]
+        stats = adapter.stats_data(dataset_id)
         return {
             "id": dataset_id,
             "backend": adapter.backend,
@@ -739,7 +748,7 @@ def dataset_manifold(
     h = reg.open(dataset_id)
     # Use has_index() instead of reaching into _cache directly (encapsulation)
     if adapter.has_index(dataset_id):
-        data = adapter.manifold_data(dataset_id)  # type: ignore[attr-defined]
+        data = adapter.manifold_data(dataset_id)
         return {
             "id": dataset_id,
             "backend": adapter.backend,
