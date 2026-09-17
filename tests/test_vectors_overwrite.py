@@ -79,7 +79,7 @@ def test_overwrite_single_row(app_client):
         json={"updates": [{"row_index": 10, "vector": new_vec}]},
     )
     assert resp.status_code == 200, resp.json()
-    assert resp.json() == {"overwritten": 1}
+    assert resp.json() == {"overwritten": 1, "index_stale": False}
 
     slice_resp = client.get("/api/datasets/main--matrix/slice", params={"slice": "10:11"})
     assert slice_resp.status_code == 200

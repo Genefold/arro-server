@@ -212,14 +212,19 @@ class VectorAppendResponse(BaseModel):
     """Response body for POST /api/datasets/{dataset_id}/vectors/append.
 
     Attributes:
-        start_row:  Row index of the first appended vector (= old row count).
-        appended:   Number of vectors written (= len(request.vectors)).
-        new_shape:  Updated array shape [new_nrows, D].
+        start_row:    Row index of the first appended vector (= old row count).
+        appended:     Number of vectors written (= len(request.vectors)).
+        new_shape:    Updated array shape [new_nrows, D].
+        index_stale:  True if an ArrowSpace index exists for this dataset and
+                      is now out of date (the append added rows not reflected
+                      in the index). The client should call
+                      POST /datasets/{id}/index to rebuild.
     """
 
     start_row: int
     appended: int
     new_shape: list[int]
+    index_stale: bool = False
 
 
 class RowUpdate(BaseModel):
@@ -257,11 +262,16 @@ class VectorOverwriteResponse(BaseModel):
     """Response body for POST /api/datasets/{dataset_id}/vectors/overwrite.
 
     Attributes:
-        overwritten: Number of rows written (= len(request.updates)).
-                     Shape of the array is unchanged.
+        overwritten:  Number of rows written (= len(request.updates)).
+                      Shape of the array is unchanged.
+        index_stale:  True if an ArrowSpace index exists for this dataset and
+                      is now out of date (the overwritten vectors are no longer
+                      reflected in the index). The client should call
+                      POST /datasets/{id}/index to rebuild.
     """
 
     overwritten: int
+    index_stale: bool = False
 
 
 class VectorCountResponse(BaseModel):
