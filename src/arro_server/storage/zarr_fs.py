@@ -14,7 +14,6 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
-from ..api.serializers import deep_sanitize
 from ..errors import (
     DatasetNotFound,
     OptionalDependencyMissing,
@@ -26,6 +25,13 @@ from .base import DatasetHandle, DatasetSummary, decode_dataset_id, make_dataset
 
 if TYPE_CHECKING:
     from .registry import StorageRegistry
+
+
+def deep_sanitize(v: Any) -> Any:
+    # Deferred import: api/__init__ -> routes -> storage is circular at module
+    # import time; safe here because serializers itself has no package deps.
+    from ..api.serializers import deep_sanitize as _ds
+    return _ds(v)
 
 log = logging.getLogger(__name__)
 
