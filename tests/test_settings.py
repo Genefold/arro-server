@@ -56,3 +56,22 @@ def test_items_limit_validation_rejects_inconsistent_settings() -> None:
         Settings(items_default_limit=0)
     with pytest.raises(ValidationError):
         Settings(items_default_limit=200, items_max_limit=100)
+
+
+def test_max_response_elements_default() -> None:
+    s = Settings()
+    assert s.max_response_elements == 1_000_000
+
+
+def test_max_response_elements_env_override(monkeypatch) -> None:
+    monkeypatch.setenv("ARRO_SERVER_MAX_RESPONSE_ELEMENTS", "500000")
+    settings_mod.reset_settings_cache()
+    s = Settings()
+    assert s.max_response_elements == 500_000
+
+
+def test_max_response_elements_zero_is_valid() -> None:
+    # Zero rejects every non-empty response — extreme but not invalid at the
+    # settings level; enforcement happens at the route layer.
+    s = Settings(max_response_elements=0)
+    assert s.max_response_elements == 0

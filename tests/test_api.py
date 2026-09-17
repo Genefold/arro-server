@@ -93,11 +93,24 @@ def test_data_response_element_cap_400(client: TestClient, monkeypatch: pytest.M
     # (50, 4) matrix: limit=50 -> 200 elements > cap of 100.
     r = client.get("/api/datasets/main--matrix/data?offset=0&limit=50")
     assert r.status_code == 400
-    assert "ARRO_SERVER_MAX_RESPONSE_ELEMENTS" in r.json()["detail"]
+    detail = r.json()["detail"]
+    assert "ARRO_SERVER_MAX_RESPONSE_ELEMENTS" in detail
+    assert "200" in detail  # actual element count
+    assert "100" in detail  # the cap value
 
 
 def test_data_response_element_cap_narrow_ok(client: TestClient) -> None:
     """Default cap leaves normal requests untouched (200 elements < 1M)."""
+    r = client.get("/api/datasets/main--matrix/data?offset=0&limit=50")
+    assert r.status_code == 200
+
+
+def test_data_response_element_cap_override_succeeds(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Cap raised via env var -> the request blocked at cap=100 returns 200."""
+    monkeypatch.setenv("ARRO_SERVER_MAX_RESPONSE_ELEMENTS", "10000000")
+    settings_mod.reset_settings_cache()
     r = client.get("/api/datasets/main--matrix/data?offset=0&limit=50")
     assert r.status_code == 200
 
@@ -109,6 +122,39 @@ def test_slice_response_element_cap_400(client: TestClient, monkeypatch: pytest.
     r = client.get("/api/datasets/main--matrix/slice?slice=0:50,:")
     assert r.status_code == 400
     assert "ARRO_SERVER_MAX_RESPONSE_ELEMENTS" in r.json()["detail"]
+
+
+def test_slice_response_element_cap_override_succeeds(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Raised cap allows /slice request that the tight cap blocks."""
+    monkeypatch.setenv("ARRO_SERVER_MAX_RESPONSE_ELEMENTS", "10000000")
+    settings_mod.reset_settings_cache()
+    r = client.get("/api/datasets/main--matrix/slice?slice=0:50,:")
+    assert r.status_code == 200
+
+
+def test_data_default_window_unaffected(client: TestClient) -> None:
+    """No ?limit -> default_window=100 -> clamped to 50 rows, untouched by cap."""
+    r = client.get("/api/datasets/main--matrix/data")
+    assert r.status_code == 200
+    assert len(r.json()["data"]["rows"]) == 50
+
+
+def test_data_element_cap_boundary_exact(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Exactly at the cap is accepted; one element fewer is rejected."""
+    # main--matrix is (50, 4) -> 200 elements for limit=50.
+    monkeypatch.setenv("ARRO_SERVER_MAX_RESPONSE_ELEMENTS", "200")
+    settings_mod.reset_settings_cache()
+    r_ok = client.get("/api/datasets/main--matrix/data?offset=0&limit=50")
+    assert r_ok.status_code == 200
+
+    monkeypatch.setenv("ARRO_SERVER_MAX_RESPONSE_ELEMENTS", "199")
+    settings_mod.reset_settings_cache()
+    r_bad = client.get("/api/datasets/main--matrix/data?offset=0&limit=50")
+    assert r_bad.status_code == 400
 
 
 def test_slice(client: TestClient) -> None:
