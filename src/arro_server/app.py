@@ -36,7 +36,16 @@ def _make_lifespan(settings: Settings):
     async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         from .arrowspace_adapter import load as load_adapter
 
-        adapter = load_adapter()
+        tune_path = Path(settings.tune_params_path).expanduser().resolve()
+        tune_path.parent.mkdir(parents=True, exist_ok=True)
+
+        tune_store = TuneStore(tune_path)
+        tuner_adapter = TunerAdapter(tune_store)
+        app.state.tune_store = tune_store
+        app.state.tuner_adapter = tuner_adapter
+        log.info("[startup] TuneStore initialised at %s", tune_path)
+
+        adapter = load_adapter(tune_store)
         index_store = Path(settings.index_store).expanduser().resolve()
 
         try:
@@ -54,15 +63,6 @@ def _make_lifespan(settings: Settings):
                 "[startup] Index reload failed — server starts without pre-loaded indices.",
                 exc_info=True,
             )
-
-        tune_path = Path(settings.tune_params_path).expanduser().resolve()
-        tune_path.parent.mkdir(parents=True, exist_ok=True)
-
-        tune_store = TuneStore(tune_path)
-        tuner_adapter = TunerAdapter(tune_store)
-        app.state.tune_store = tune_store
-        app.state.tuner_adapter = tuner_adapter
-        log.info("[startup] TuneStore initialised at %s", tune_path)
 
         yield  # application is now running
 

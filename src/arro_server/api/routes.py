@@ -42,10 +42,11 @@ POST /api/admin/reload                                     -- hot-reload Storage
 from __future__ import annotations
 
 import asyncio
+import logging
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 
 from .. import __version__
 from ..arrowspace_adapter import DEFAULT_GRAPH_PARAMS, ArrowSpaceAdapter
@@ -73,6 +74,8 @@ from .schemas import (
     VectorOverwriteResponse,
 )
 from .serializers import array_to_payload
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api")
 admin_router = APIRouter(prefix="/api/admin")
@@ -196,6 +199,7 @@ def _require_admin_token(
 
 @admin_router.post("/reload", dependencies=[Depends(_require_admin_token)])
 async def admin_reload(
+    request: Request,
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
     """Invalidate all LRU caches and re-scan data_roots.
@@ -208,13 +212,21 @@ async def admin_reload(
     from ..storage.registry import get_registry, reset_registry_cache
 
     reset_registry_cache()  # marks _cache = None (invalidate, not singleton destroy)
+
+    tune_store = getattr(request.app.state, "tune_store", None)
+    if tune_store is None:
+        log.warning(
+            "admin_reload: app.state.tune_store not set (lifespan incomplete?); "
+            "rebuilt adapter will fall back to default graph_params"
+        )
+
     reset_adapter_cache()
 
     registry = get_registry()
     # TODO(multi-worker): replace asyncio.to_thread with ARQ/Celery task
     datasets = await asyncio.to_thread(registry.list_datasets)
 
-    new_adapter = load_adapter()
+    new_adapter = load_adapter(tune_store)
     index_store = Path(settings.index_store).expanduser().resolve()
     try:
         # TODO(multi-worker): replace asyncio.to_thread with ARQ/Celery task
