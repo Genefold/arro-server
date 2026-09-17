@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import threading
+from dataclasses import asdict
 from pathlib import Path
 
 import pytest
@@ -81,7 +82,7 @@ class TestTunedParamsValidation:
 
     def test_from_dict_round_trip(self):
         p = make_params()
-        assert TunedParams.from_dict(p.__dict__) == p  # type: ignore
+        assert TunedParams.from_dict(asdict(p)) == p
 
     def test_to_graph_params_keys(self):
         gp = make_params().to_graph_params()
