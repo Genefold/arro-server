@@ -22,7 +22,7 @@ class TunedParams:
     k: int          # lambda-graph neighbour count
     topk: int       # retrieval neighbour count at query time
     p: float        # Minkowski p-norm
-    sigma: float    # RBF kernel bandwidth
+    sigma: float | None  # RBF kernel bandwidth (None allowed per tuner contract)
     score: float    # tuning objective score (e.g. recall@k)
     tuned_at: str   # ISO 8601 UTC timestamp
     dataset: str    # dataset key
@@ -38,7 +38,7 @@ class TunedParams:
             raise ValueError(f"eps must be > 0, got {self.eps}")
         if self.p <= 0:
             raise ValueError(f"p must be > 0, got {self.p}")
-        if self.sigma is None or self.sigma <= 0:
+        if self.sigma is not None and self.sigma <= 0:
             raise ValueError(f"sigma must be > 0, got {self.sigma}")
         if not isinstance(self.score, (int, float)):
             raise TypeError(f"score must be numeric, got {type(self.score)}")
@@ -57,16 +57,21 @@ class TunedParams:
 
     @classmethod
     def from_dict(cls, data: dict) -> TunedParams:
-        return cls(
-            eps=float(data["eps"]),
-            k=int(data["k"]),
-            topk=int(data["topk"]),
-            p=float(data["p"]),
-            sigma=float(data["sigma"]),
-            score=float(data["score"]),
-            tuned_at=str(data["tuned_at"]),
-            dataset=str(data["dataset"]),
-        )
+        try:
+            return cls(
+                eps=float(data["eps"]),
+                k=int(data["k"]),
+                topk=int(data["topk"]),
+                p=float(data["p"]),
+                sigma=float(data["sigma"]) if data["sigma"] is not None else None,
+                score=float(data["score"]),
+                tuned_at=str(data["tuned_at"]),
+                dataset=str(data["dataset"]),
+            )
+        except KeyError as exc:
+            raise ValueError(
+                f"TunedParams missing required field: {exc}"
+            ) from exc
 
     def to_graph_params(self) -> dict:
         """Return a dict ready for pyarrowspace.ArrowSpaceBuilder.with_lambda_graph()."""
@@ -87,7 +92,8 @@ class TuneStore:
 
     def get(self, dataset: str) -> TunedParams | None:
         """Return TunedParams for *dataset*, or None if not found."""
-        raw = self._load().get(dataset)
+        with self._lock:
+            raw = self._load().get(dataset)
         return TunedParams.from_dict(raw) if raw is not None else None
 
     def set(self, dataset: str, params: TunedParams) -> None:
@@ -113,7 +119,9 @@ class TuneStore:
 
     def all(self) -> dict[str, TunedParams]:
         """Return all stored params as {dataset: TunedParams}."""
-        return {k: TunedParams.from_dict(v) for k, v in self._load().items()}
+        with self._lock:
+            data = self._load()
+        return {k: TunedParams.from_dict(v) for k, v in data.items()}
 
     def _load(self) -> dict:
         if not self._path.exists():

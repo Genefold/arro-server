@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import threading
+from dataclasses import asdict
 from pathlib import Path
 
 import pytest
@@ -56,9 +57,9 @@ class TestTunedParamsValidation:
         with pytest.raises(ValueError, match="sigma"):
             make_params(sigma=0.0)
 
-    def test_sigma_none_invalid(self):
-        with pytest.raises(ValueError, match="sigma"):
-            make_params(sigma=None)  # type: ignore
+    def test_sigma_none_allowed(self):
+        # sigma=None is a valid tuner outcome (no RBF bandwidth chosen)
+        assert make_params(sigma=None).sigma is None
 
     def test_p_zero_invalid(self):
         with pytest.raises(ValueError, match="p must be"):
@@ -81,7 +82,7 @@ class TestTunedParamsValidation:
 
     def test_from_dict_round_trip(self):
         p = make_params()
-        assert TunedParams.from_dict(p.__dict__) == p  # type: ignore
+        assert TunedParams.from_dict(asdict(p)) == p
 
     def test_to_graph_params_keys(self):
         gp = make_params().to_graph_params()
@@ -203,3 +204,32 @@ class TestTuneStoreConcurrency:
 
         assert not errors
         assert len(store.all()) == 5
+
+    def test_concurrent_read_write_does_not_raise(self, tmp_path):
+        path = tmp_path / "tune.json"
+        store = TuneStore(path)
+        store.set("mnist", make_params("mnist"))
+        errors: list[Exception] = []
+
+        def reader() -> None:
+            try:
+                for _ in range(30):
+                    store.get("mnist")
+            except Exception as exc:
+                errors.append(exc)
+
+        def writer() -> None:
+            try:
+                for i in range(30):
+                    store.set("mnist", make_params("mnist", score=0.5 + i * 0.01))
+            except Exception as exc:
+                errors.append(exc)
+
+        threads = [threading.Thread(target=reader) for _ in range(3)] + [
+            threading.Thread(target=writer) for _ in range(2)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        assert not errors
