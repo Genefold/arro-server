@@ -60,6 +60,8 @@ class Settings(BaseSettings):
     admin_token: str | None = None
     # Path to the JSON file where per-dataset tuned ArrowSpace graph parameters
     # are persisted. Resolved relative to CWD if not absolute.
+    # Default kept as ./tune_params.json (Issue #69 proposed ./data/tune_params.json;
+    # that default was already committed before this phase merged).
     tune_params_path: str = "./tune_params.json"
 
     @field_validator("data_roots", "cors_origins", mode="before")

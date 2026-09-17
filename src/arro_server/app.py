@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import importlib.resources
 import logging
 from collections.abc import AsyncGenerator
@@ -16,44 +17,63 @@ from .api import admin_router
 from .api import router as api_router
 from .errors import MetadataUnavailable, OptionalDependencyMissing
 from .settings import Settings, get_settings
+from .storage.tune_store import TuneStore
+from .tuner_adapter import TunerAdapter
 
 log = logging.getLogger(__name__)
 
 
-@asynccontextmanager
-async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    """Restore persisted ArrowSpace indices on startup.
+def _make_lifespan(settings: Settings):
+    """Return a lifespan context manager closed over *settings*.
 
-    Scans ``index_manifest.json`` inside ``settings.index_store`` and
-    reloads every previously-built index into the LRU cache via
-    ``load_arrowspace()`` (the arrowspace Rust function, not the adapter
-    factory).  Safe to call when the manifest is absent or when the
-    arrowspace package is not installed — both cases are handled
-    gracefully with a log warning and no exception propagation.
+    On startup: reloads persisted ArrowSpace indices (non-fatal on failure)
+    and registers TuneStore + TunerAdapter on ``app.state``.
+    On shutdown: cancels any in-flight tuning tasks.
     """
-    from .arrowspace_adapter import load as load_adapter
 
-    settings = get_settings()
-    adapter = load_adapter()
-    index_store = Path(settings.index_store).expanduser().resolve()
+    @asynccontextmanager
+    async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+        from .arrowspace_adapter import load as load_adapter
 
-    try:
-        loaded = adapter.reload_from_manifest(index_store)
-        if loaded:
-            log.info(
-                "[startup] Reloaded %d ArrowSpace index(es) from manifest: %s",
-                len(loaded),
-                loaded,
+        adapter = load_adapter()
+        index_store = Path(settings.index_store).expanduser().resolve()
+
+        try:
+            loaded = adapter.reload_from_manifest(index_store)
+            if loaded:
+                log.info(
+                    "[startup] Reloaded %d ArrowSpace index(es) from manifest: %s",
+                    len(loaded),
+                    loaded,
+                )
+            else:
+                log.info("[startup] No persisted ArrowSpace indices found in %s", index_store)
+        except Exception:
+            log.warning(
+                "[startup] Index reload failed — server starts without pre-loaded indices.",
+                exc_info=True,
             )
-        else:
-            log.info("[startup] No persisted ArrowSpace indices found in %s", index_store)
-    except Exception:
-        log.warning(
-            "[startup] Index reload failed — server starts without pre-loaded indices.",
-            exc_info=True,
-        )
 
-    yield  # application is now running
+        tune_path = Path(settings.tune_params_path).expanduser().resolve()
+        tune_path.parent.mkdir(parents=True, exist_ok=True)
+
+        tune_store = TuneStore(tune_path)
+        tuner_adapter = TunerAdapter(tune_store)
+        app.state.tune_store = tune_store
+        app.state.tuner_adapter = tuner_adapter
+        log.info("[startup] TuneStore initialised at %s", tune_path)
+
+        yield  # application is now running
+
+        running_tasks = list(tuner_adapter._running.values())
+        if running_tasks:
+            log.info("[shutdown] Cancelling %d in-flight tuning task(s)...", len(running_tasks))
+            for task in running_tasks:
+                task.cancel()
+            await asyncio.gather(*running_tasks, return_exceptions=True)
+            log.info("[shutdown] All tuning tasks cancelled.")
+
+    return _lifespan
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -62,7 +82,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         title="arro-server",
         version=__version__,
         description="Serve Zarr v3 datasets and ArrowSpace metadata over HTTP.",
-        lifespan=_lifespan,
+        lifespan=_make_lifespan(settings),
     )
     app.add_middleware(
         CORSMiddleware,
