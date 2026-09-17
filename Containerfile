@@ -24,7 +24,8 @@ RUN pip install --prefix=/install \
     "pydantic-settings>=2.10.3" \
     "numpy>=1.26" \
     "zarr>=3.0" \
-    "pyarrow>=15.0"
+    "pyarrow>=15.0" \
+    "polars>=1.0"
 
 FROM python:3.12-slim AS runtime
 
