@@ -23,7 +23,9 @@ RUN pip install --prefix=/install $(python -c "import tomllib; deps = tomllib.lo
 
 # arrowspace ships no linux wheel; built from sdist with full dep resolution, which
 # pulls its own requirements (numpy, pyarrow, pandas, scikit-learn) automatically.
-RUN pip install --prefix=/install arrowspace
+# Specifier is read from pyproject.toml so a constraint change alone invalidates this layer.
+RUN pip install --prefix=/install \
+    $(python -c "import tomllib; deps = tomllib.load(open('pyproject.toml','rb'))['project']['dependencies']; print(next(d for d in deps if d.startswith('arrowspace')))")
 
 FROM python:3.12-slim AS runtime
 

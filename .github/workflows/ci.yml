@@ -101,6 +101,19 @@ jobs:
         run: |
           image="$(grep ':sha-' <<<"$TAGS" | head -n1)"
           docker pull "$image"
-          docker run -d --name smoke -p 8000:8000 "$image"
+          # Inherits the image HEALTHCHECK; only timing is overridden
+          docker run -d --name smoke \
+            --health-interval=3s \
+            --health-start-period=5s \
+            --health-retries=10 \
+            -p 8000:8000 "$image"
           trap 'docker rm -f smoke' EXIT
-          curl --retry 15 --retry-delay 5 --retry-all-errors --fail http://localhost:8000/api/health
+          # Wait for Docker's own health state — no timing guesswork
+          for i in $(seq 1 30); do
+            hstatus="$(docker inspect --format='{{.State.Health.Status}}' smoke)"
+            [ "$hstatus" = "healthy" ] && break
+            [ "$hstatus" = "unhealthy" ] && { echo "Container unhealthy:"; docker logs smoke; exit 1; }
+            sleep 2
+          done
+          # Single sanity hit against a known-healthy container
+          curl --fail http://localhost:8000/api/health
