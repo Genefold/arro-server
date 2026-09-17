@@ -73,9 +73,14 @@ def _export_dataset_to_npy(dataset_id: str, reg: StorageRegistry, settings: Sett
     arr = h.read_window(rs)
     out = _tune_input_path(settings, dataset_id)
     out.parent.mkdir(parents=True, exist_ok=True)
-    # ponytail: full re-export per launch; cache by content hash if tuning
-    # becomes frequent on large datasets.
-    np.save(out, np.asarray(arr, dtype=np.float64))
+    # Atomic write (tmp + replace, same pattern as TuneStore._persist): two
+    # near-simultaneous POSTs for the same dataset may export concurrently —
+    # a reader must never see a torn file.
+    # TODO(cleanup): tune_inputs/<id>.npy is overwritten per launch but never
+    # garbage-collected; delete stale entries in lifespan shutdown or track
+    # in a follow-up issue.
+    np.save(out.with_suffix(".tmp.npy"), np.asarray(arr, dtype=np.float64))
+    out.with_suffix(".tmp.npy").replace(out)
     return out
 
 
