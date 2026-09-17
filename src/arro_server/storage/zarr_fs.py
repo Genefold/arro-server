@@ -423,7 +423,8 @@ class ZarrFilesystemBackend:
             - Path resolution & open: O(1)  — single zarr.json read.
             - Validation:             O(K)  — K = len(updates), bounds + dim check.
             - dtype cast:             O(K·D) — cast batch array if needed.
-            - Write:                  O(K·D) — K individual row assignments.
+            - Deduplication:          O(K)   — dict pass, keeps last occurrence per index.
+            - Write:                  O(K·D) — single fancy-index assignment.
             - Cache update:           none   — shape is unchanged.
 
         Duplicate row_index values in updates are permitted. The last entry
@@ -507,6 +508,17 @@ class ZarrFilesystemBackend:
                     f"vectors already cast to {arr_dtype}."
                 )
 
+        # Deduplicate: keep last occurrence of each row index (last-wins
+        # contract). Required because zarr fancy-index assignment is
+        # first-wins; without deduplication a batched write would invert the
+        # documented semantics.
+        seen: dict[int, int] = {}          # row_index → position in vecs
+        for i, upd in enumerate(updates):
+            seen[upd.row_index] = i
+        deduped_positions = list(seen.values())         # positions in vecs, insertion order
+        deduped_indices = [updates[p].row_index for p in deduped_positions]
+        deduped_vecs = vecs[deduped_positions]          # shape (K_deduped, D), contiguous
+
         # --- Write phase (inside per-dataset lock) ----------------------------
 
         with self._get_write_lock(dataset_id):
@@ -527,8 +539,7 @@ class ZarrFilesystemBackend:
                     f"Dataset '{dataset_id}' dtype changed between validation and write: "
                     f"expected {vecs.dtype}, found {arr.dtype}."
                 )
-            for i, upd in enumerate(updates):
-                arr[upd.row_index] = vecs[i]
+            arr[np.asarray(deduped_indices), :] = deduped_vecs
 
         # Shape is unchanged — do NOT call registry.register_dataset().
         return len(updates)

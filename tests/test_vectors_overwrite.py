@@ -14,7 +14,8 @@ Test index:
     11. test_overwrite_validate_all_then_write — invalid entry after valid one → 422, no partial write
     12. test_overwrite_duplicate_row_index     — last entry wins, no error
     13. test_overwrite_toctou_shape_change_422 — mock zarr.open("r+") to trigger TOCTOU
-    14. test_overwrite_index_stale_warning     — (docstring only, not runtime assertion)
+    14. test_overwrite_batched_matches_loop — batched fancy-index write == per-row loop (fixed seed, dupes)
+    15. test_overwrite_index_stale_warning     — (docstring only, not runtime assertion)
 """
 
 import os
@@ -337,3 +338,49 @@ def test_overwrite_toctou_shape_change_422(app_client):
         with pytest.raises(Exception) as exc_info:
             backend.overwrite_vectors("main--matrix", updates, dtype="float32")
         assert "shape changed" in str(exc_info.value).lower()
+
+
+# ---------------------------------------------------------------------------
+# 14. Batched fancy-index write matches per-row loop semantics
+# ---------------------------------------------------------------------------
+
+
+def test_overwrite_batched_matches_loop(app_client):
+    """Batched fancy-index write produces identical results to per-row loop,
+    including last-wins dedup semantics for duplicate row indices."""
+    import zarr
+
+    from arro_server.api.schemas import RowUpdate
+    from arro_server.settings import get_settings
+    from arro_server.storage.zarr_fs import ZarrFilesystemBackend
+
+    client, tmp_path = app_client
+    rng = np.random.default_rng(42)
+
+    # Build reference array (identical to fixture dataset).
+    ref = zarr.open(str(tmp_path / "ref"), mode="w", shape=(50, 4), chunks=(10, 4), dtype="float32")
+    ref[:] = np.arange(200, dtype="float32").reshape(50, 4)
+
+    # K random updates with deliberate duplicates.
+    K = 30
+    updates = [
+        RowUpdate(row_index=int(rng.integers(0, 50)), vector=rng.normal(size=4).tolist())
+        for _ in range(K)
+    ]
+    # Force duplicates: repeat a few indices with new vectors.
+    for idx in (0, 25, 49):
+        updates.append(RowUpdate(row_index=idx, vector=rng.normal(size=4).tolist()))
+
+    # Old path: per-row loop on the reference array.
+    for upd in updates:
+        ref[upd.row_index] = np.asarray(upd.vector, dtype="float32")
+
+    # New path: batched backend on the fixture dataset.
+    settings = get_settings()
+    backend = ZarrFilesystemBackend(settings.resolved_roots)
+    n = backend.overwrite_vectors("main--matrix", updates, dtype="float32")
+    assert n == len(updates)
+
+    got = zarr.open(str(tmp_path / "matrix"), mode="r")[:]
+    expected = ref[:]
+    assert np.array_equal(got, expected)
