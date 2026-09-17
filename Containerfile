@@ -14,18 +14,16 @@ RUN apt-get update \
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --no-modify-path
 ENV PATH="/root/.cargo/bin:${PATH}"
 
-RUN pip install maturin \
-    && pip install --prefix=/install --no-deps arrowspace
+# Copy only what pip needs to resolve deps — avoids invalidating this layer on src changes
+COPY pyproject.toml README.md ./
 
-RUN pip install --prefix=/install \
-    "fastapi>=0.110" \
-    "uvicorn[standard]>=0.27" \
-    "pydantic>=2.6" \
-    "pydantic-settings>=2.10.3" \
-    "numpy>=1.26" \
-    "zarr>=3.0" \
-    "pyarrow>=15.0" \
-    "polars>=1.0"
+# Single source of truth: install exactly what [project].dependencies declares.
+# arrowspace is excluded here so its (expensive, Rust) sdist build stays cached in its own layer.
+RUN pip install --prefix=/install $(python -c "import tomllib; deps = tomllib.load(open('pyproject.toml','rb'))['project']['dependencies']; print(' '.join(d for d in deps if not d.startswith('arrowspace')))")
+
+# arrowspace ships no linux wheel; built from sdist with full dep resolution, which
+# pulls its own requirements (numpy, pyarrow, pandas, scikit-learn) automatically.
+RUN pip install --prefix=/install arrowspace
 
 FROM python:3.12-slim AS runtime
 

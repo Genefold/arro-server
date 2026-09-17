@@ -10,3 +10,7 @@ dist
 *.egg-info
 tests
 example_data
+storage
+uploads
+.env
+reviews

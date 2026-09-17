@@ -9,9 +9,6 @@ services:
     build:
       context: .
       dockerfile: Containerfile
-      args:
-        INSTALL_ARROW: "0"
-        INSTALL_ARROWSPACE: "0"
     image: arro-server:dev
     container_name: arro-server
     ports:
