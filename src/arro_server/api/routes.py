@@ -671,6 +671,8 @@ def dataset_slice(
                 f"{settings.max_response_elements:,} (ARRO_SERVER_MAX_RESPONSE_ELEMENTS). "
                 "Reduce limit/window or raise the cap."
             )
+    # InvalidSlice subclasses ValueError (errors.py:26) — it must stay ahead of
+    # the ValueError handler below, which catches the element-cap guard's error.
     except InvalidSlice as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except DatasetNotSliceable as exc:
