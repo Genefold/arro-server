@@ -629,6 +629,15 @@ def dataset_data(
         # Window budget is scaled by the product of trailing dimensions so that
         # multi-dimensional arrays are bounded by total element count, not rows.
         enforce_window_budget(rs, settings.max_window * max(1, trailing_product(h.summary.shape)))
+        # Element-count guard (width-independent): the row budget alone allows
+        # max_window * product(shape[1:]) elements, which is far too much for
+        # wide datasets (e.g. 384-dim embeddings).
+        if rs.n_elements > settings.max_response_elements:
+            raise ValueError(
+                f"Request would return {rs.n_elements:,} elements; limit is "
+                f"{settings.max_response_elements:,} (ARRO_SERVER_MAX_RESPONSE_ELEMENTS). "
+                "Reduce limit/window or raise the cap."
+            )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     arr = h.read_window(rs)
@@ -655,6 +664,13 @@ def dataset_slice(
     try:
         rs = parse_slice(spec, h.summary.shape)
         enforce_window_budget(rs, settings.max_window * max(1, trailing_product(h.summary.shape)))
+        # Element-count guard (width-independent) — see dataset_data.
+        if rs.n_elements > settings.max_response_elements:
+            raise ValueError(
+                f"Request would return {rs.n_elements:,} elements; limit is "
+                f"{settings.max_response_elements:,} (ARRO_SERVER_MAX_RESPONSE_ELEMENTS). "
+                "Reduce limit/window or raise the cap."
+            )
     except InvalidSlice as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except DatasetNotSliceable as exc:
