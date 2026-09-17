@@ -58,6 +58,9 @@ class Settings(BaseSettings):
     # Optional static bearer token protecting /api/admin/* endpoints.
     # Leave unset (default None) for unauthenticated access (dev/private-network only).
     admin_token: str | None = None
+    # Path to the JSON file where per-dataset tuned ArrowSpace graph parameters
+    # are persisted. Resolved relative to CWD if not absolute.
+    tune_params_path: str = "./tune_params.json"
 
     @field_validator("data_roots", "cors_origins", mode="before")
     @classmethod
