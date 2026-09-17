@@ -19,6 +19,7 @@ dependencies = [
     "zarr>=3.0",
     "polars>=1.0",
     "arrowspace>=0.26.2",
+    "arrowspace-tuner>=0.5.0,<0.6",
 ]
 
 [project.optional-dependencies]
