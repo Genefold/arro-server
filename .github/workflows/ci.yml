@@ -101,9 +101,11 @@ jobs:
         run: |
           image="$(grep ':sha-' <<<"$TAGS" | head -n1)"
           docker pull "$image"
-          # Inherits the image HEALTHCHECK; only timing is overridden
+          # Full healthcheck override: curl probe (curl is installed in the runtime image)
           docker run -d --name smoke \
+            --health-cmd 'curl -sf http://localhost:8000/api/health' \
             --health-interval=3s \
+            --health-timeout=5s \
             --health-start-period=5s \
             --health-retries=10 \
             -p 8000:8000 "$image"
