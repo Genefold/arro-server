@@ -428,7 +428,8 @@ class ZarrFilesystemBackend:
             - Cache update:           none   — shape is unchanged.
 
         Duplicate row_index values in updates are permitted. The last entry
-        for a given index wins. No deduplication is performed.
+        for a given index wins. Deduplication is applied internally; the
+        caller need not pre-deduplicate.
 
         NOTE — TOCTOU asymmetry: row_index bounds are validated against
         arr.shape[0] outside the lock.  A concurrent append_vectors may
@@ -517,7 +518,7 @@ class ZarrFilesystemBackend:
             seen[upd.row_index] = i
         deduped_positions = list(seen.values())         # positions in vecs, insertion order
         deduped_indices = [updates[p].row_index for p in deduped_positions]
-        deduped_vecs = vecs[deduped_positions]          # shape (K_deduped, D), contiguous
+        deduped_vecs = np.ascontiguousarray(vecs[deduped_positions])  # shape (K_deduped, D)
 
         # --- Write phase (inside per-dataset lock) ----------------------------
 
