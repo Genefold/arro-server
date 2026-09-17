@@ -322,13 +322,11 @@ class TuneRequest(BaseModel):
     )
     eps_range: tuple[float, float] | None = Field(
         default=None,
-        description="Inclusive [low, high] sweep for eps. "
-                    "Both values must be > 0 and low <= high.",
+        description="Inclusive [low, high] sweep for eps. Both values must be > 0 and low <= high.",
     )
     k_range: tuple[int, int] | None = Field(
         default=None,
-        description="Inclusive [low, high] sweep for k. "
-                    "Both values must be >= 1 and low <= high.",
+        description="Inclusive [low, high] sweep for k. Both values must be >= 1 and low <= high.",
     )
     n_trials: int = Field(
         default=30,
@@ -420,7 +418,5 @@ class TuneStatusResponse(BaseModel):
         if self.status == "done" and self.params is None:
             raise ValueError("params must be set when status is 'done'")
         if self.status != "done" and self.params is not None:
-            raise ValueError(
-                f"params must be None when status is '{self.status}'"
-            )
+            raise ValueError(f"params must be None when status is '{self.status}'")
         return self
