@@ -71,3 +71,12 @@ def configured_app(tmp_zarr_root: Path):
     settings_mod.reset_settings_cache()
     registry_mod.get_registry.cache_clear()  # full singleton reset for test isolation
     arrowspace_adapter.reset_adapter_cache()
+
+
+@pytest.fixture(autouse=True)
+def _reset_settings_cache():
+    """Ensure the settings LRU cache is cleared between every test."""
+    from arro_server import settings as settings_mod
+
+    yield
+    settings_mod.reset_settings_cache()

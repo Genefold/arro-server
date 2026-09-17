@@ -11,6 +11,17 @@ def test_full_slice() -> None:
     assert rs.n_elements == 40
 
 
+def test_n_elements_1d() -> None:
+    rs = parse_slice("0:500", (1000,))
+    assert rs.n_elements == 500
+
+
+def test_n_elements_wide_embedding() -> None:
+    # (10000, 384) full read — the motivating case from issue #54.
+    rs = parse_slice(None, (10_000, 384), offset=0, limit=10_000)
+    assert rs.n_elements == 3_840_000
+
+
 def test_offset_limit() -> None:
     rs = parse_slice(None, (100, 4), offset=10, limit=5)
     assert rs.out_shape == (5, 4)
@@ -21,6 +32,7 @@ def test_collapsed_axis() -> None:
     rs = parse_slice("3,:", (10, 4))
     assert rs.out_shape == (4,)
     assert rs.selectors[0] == 3
+    assert rs.n_elements == 4  # collapsed axis excluded, not 40
 
 
 def test_negative_index_normalised() -> None:
@@ -31,6 +43,7 @@ def test_negative_index_normalised() -> None:
 def test_step() -> None:
     rs = parse_slice("0:10:2", (10,))
     assert rs.out_shape == (5,)
+    assert rs.n_elements == 5
 
 
 def test_invalid_too_many_axes() -> None:
@@ -57,6 +70,7 @@ def test_budget_enforced() -> None:
 def test_offset_clamped_past_end() -> None:
     rs = parse_slice(None, (10,), offset=20, limit=5)
     assert rs.out_shape == (0,)
+    assert rs.n_elements == 0
 
 
 def test_items_window_rejects_offset_near_safe_boundary() -> None:
