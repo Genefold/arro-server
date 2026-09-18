@@ -111,7 +111,12 @@ class TestLaunchIdempotency:
                 # Simulate the task never completing during the test
                 mock_task = MagicMock()
                 mock_task.done.return_value = False
-                mock_loop.return_value.create_task.return_value = mock_task
+
+                def fake_create_task(coro, **kw):
+                    coro.close()  # avoid "never awaited" warning
+                    return mock_task
+
+                mock_loop.return_value.create_task.side_effect = fake_create_task
 
                 adapter.launch("mnist", embeddings_file)
                 assert adapter.is_running("mnist")
