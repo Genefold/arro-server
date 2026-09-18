@@ -97,7 +97,6 @@ class TestArrowspaceDependencyWiring:
 @pytest.fixture
 def wired_app(tmp_zarr_root: Path, tmp_path: Path, monkeypatch):
     """Real create_app with lifespan; fake arrowspace; isolated stores."""
-    from arro_server import arrowspace_adapter
     from arro_server import settings as settings_mod
     from arro_server.app import create_app
     from arro_server.storage import registry as registry_mod
@@ -108,13 +107,18 @@ def wired_app(tmp_zarr_root: Path, tmp_path: Path, monkeypatch):
     monkeypatch.setenv("ARRO_SERVER_TUNE_PARAMS_PATH", str(tmp_path / "tune_params.json"))
     monkeypatch.setenv("ARRO_SERVER_INDEX_STORE", str(tmp_path / "index_store"))
     settings_mod.reset_settings_cache()
-    registry_mod.reset_registry_cache()
-    arrowspace_adapter.reset_adapter_cache()
+    # Full singleton reset: reset_registry_cache() only invalidates the cached
+    # dataset dict, but the singleton keeps the roots baked in at creation
+    # time. A singleton created by an earlier test (with that test's tmp_path)
+    # would resolve main--matrix against the wrong root and 404. CI's file
+    # ordering exposed this; conftest.configured_app does the same reset.
+    registry_mod.get_registry.cache_clear()
+    reset_adapter_cache()
 
     yield create_app()
 
     settings_mod.reset_settings_cache()
-    registry_mod.reset_registry_cache()
+    registry_mod.get_registry.cache_clear()
     reset_adapter_cache()
 
 
