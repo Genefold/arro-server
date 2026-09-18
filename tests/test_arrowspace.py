@@ -912,9 +912,9 @@ class TestItemsPagination:
 
     def test_items_window_never_exceeds_limit(self, built_client: TestClient):
         """aspace.get_item must only be called for indices inside the window."""
-        from arro_server.arrowspace_adapter import load
-
-        entry = load()._cache.get(DATASET_ID)
+        # Read the cache of the same adapter instance the routes use
+        # (parked on app.state by the lifespan), not a fresh load().
+        entry = built_client.app.state.arrowspace_adapter._cache.get(DATASET_ID)
         calls: list[int] = []
         original = entry.aspace.get_item
 

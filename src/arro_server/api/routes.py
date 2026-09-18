@@ -49,7 +49,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 
 from .. import __version__
-from ..arrowspace_adapter import DEFAULT_GRAPH_PARAMS, ArrowSpaceAdapter
+from ..arrowspace_adapter import ArrowSpaceAdapter
 from ..arrowspace_adapter import load as load_arrowspace
 from ..errors import DatasetNotSliceable, InvalidSlice, OptionalDependencyMissing
 from ..settings import Settings, get_settings
@@ -173,8 +173,16 @@ def _registry() -> StorageRegistry:
     return get_registry()
 
 
-def _arrowspace() -> ArrowSpaceAdapter:
-    return load_arrowspace()
+def _arrowspace(request: Request) -> ArrowSpaceAdapter:
+    # Single adapter instance per app: the lifespan builds it with the
+    # TuneStore and parks it on app.state. Falling back to load() keeps
+    # apps without a lifespan (some test setups) working. A bare load()
+    # here would create a second lru-cache instance with tune_store=None,
+    # so tuned params never reached build_index and index caches diverged.
+    adapter = getattr(request.app.state, "arrowspace_adapter", None)
+    if adapter is not None:
+        return adapter
+    return load_arrowspace(getattr(request.app.state, "tune_store", None))
 
 
 # ---------------------------------------------------------------------------
@@ -227,6 +235,9 @@ async def admin_reload(
     datasets = await asyncio.to_thread(registry.list_datasets)
 
     new_adapter = load_adapter(tune_store)
+    # Publish the rebuilt adapter: subsequent requests must use the same
+    # instance, otherwise index caches diverge between admin and routes.
+    request.app.state.arrowspace_adapter = new_adapter
     index_store = Path(settings.index_store).expanduser().resolve()
     try:
         # TODO(multi-worker): replace asyncio.to_thread with ARQ/Celery task
@@ -583,8 +594,11 @@ def vectors_count(
 
 
 @router.get("/health")
-def health(settings: Settings = Depends(get_settings)) -> dict[str, Any]:
-    adapter = load_arrowspace()
+def health(
+    request: Request,
+    settings: Settings = Depends(get_settings),
+    adapter: ArrowSpaceAdapter = Depends(_arrowspace),
+) -> dict[str, Any]:
     return {
         "status": "ok",
         "version": __version__,
@@ -818,22 +832,23 @@ async def build_index(
     rs = parse_slice(None, h.summary.shape, offset=0, limit=h.summary.shape[0])
     arr = h.read_window(rs)
     index_store = Path(settings.index_store).expanduser().resolve()
-    effective_params = body.graph_params or DEFAULT_GRAPH_PARAMS
+    # Pass body.graph_params through unmodified (None when absent) — the
+    # adapter resolves user > tuned > DEFAULT_GRAPH_PARAMS. Pre-injecting
+    # defaults here would defeat the TuneStore fallback.
     try:
-        # TODO(multi-worker): replace asyncio.to_thread with ARQ/Celery task
         meta = await asyncio.to_thread(
             adapter.build_index,
             dataset_id=dataset_id,
             array=arr,
             index_store=index_store,
-            graph_params=effective_params,
+            graph_params=body.graph_params,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {
         "id": dataset_id,
         "built": True,
-        "graph_params": effective_params,
+        "graph_params": meta["graph_params"],
         "nitems": meta["nitems"],
         "nfeatures": meta["nfeatures"],
         "nclusters": meta["nclusters"],

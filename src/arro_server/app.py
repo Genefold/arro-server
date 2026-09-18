@@ -46,6 +46,7 @@ def _make_lifespan(settings: Settings):
         log.info("[startup] TuneStore initialised at %s", tune_path)
 
         adapter = load_adapter(tune_store)
+        app.state.arrowspace_adapter = adapter
         index_store = Path(settings.index_store).expanduser().resolve()
 
         try:

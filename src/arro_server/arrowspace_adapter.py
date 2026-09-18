@@ -982,6 +982,7 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
             "nitems": entry.nitems,
             "nfeatures": entry.nfeatures,
             "nclusters": entry.nclusters,
+            "graph_params": gp,
         }
 
         # Persist CSR (supplementary, for export/inspection)
