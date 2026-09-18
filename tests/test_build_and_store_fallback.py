@@ -495,7 +495,7 @@ class TestMoveSemantics:
 
     def test_shutil_move_failure_propagates(self, adapter, tmp_store, tmp_cwd):
         with patch("arro_server.arrowspace_adapter.os.rename", side_effect=OSError("cross-device link")), \
-             patch("arro_server.arrowspace_adapter.shutil.move", side_effect=IOError("disk full")):
+             patch("arro_server.arrowspace_adapter.shutil.move", side_effect=OSError("disk full")):
             with pytest.raises((IOError, RuntimeError, OSError)):
                 adapter.build_index(DATASET_ID, FIXTURE_ARRAY.copy(), tmp_store)
 
@@ -515,9 +515,8 @@ class TestMoveSemantics:
 
         with patch(
             "arro_server.arrowspace_adapter._move_file", side_effect=failing_move
-        ):
-            with pytest.raises((OSError, RuntimeError, Exception)):
-                adapter.build_index(DATASET_ID, FIXTURE_ARRAY.copy(), tmp_store)
+        ), pytest.raises((OSError, RuntimeError, Exception)):
+            adapter.build_index(DATASET_ID, FIXTURE_ARRAY.copy(), tmp_store)
 
         leaked = [
             p for p in tmp_store.iterdir()
@@ -532,7 +531,8 @@ class TestMoveSemantics:
     def test_partial_move_failure_does_not_write_manifest(
         self, adapter, tmp_store, tmp_cwd
     ):
-        from arro_server.arrowspace_adapter import _move_file as real_move, _read_manifest
+        from arro_server.arrowspace_adapter import _move_file as real_move
+        from arro_server.arrowspace_adapter import _read_manifest
 
         call_count = [0]
 
@@ -545,9 +545,8 @@ class TestMoveSemantics:
 
         with patch(
             "arro_server.arrowspace_adapter._move_file", side_effect=failing_move
-        ):
-            with pytest.raises(Exception):
-                adapter.build_index(DATASET_ID, FIXTURE_ARRAY.copy(), tmp_store)
+        ), pytest.raises(Exception):
+            adapter.build_index(DATASET_ID, FIXTURE_ARRAY.copy(), tmp_store)
 
         assert DATASET_ID not in _read_manifest(tmp_store)
 
@@ -734,9 +733,8 @@ class TestBuildFailureCleansUp:
         with patch(
             "arro_server.arrowspace_adapter._move_file",
             side_effect=OSError("instant failure"),
-        ):
-            with pytest.raises(Exception):
-                adapter.build_index(DATASET_ID, FIXTURE_ARRAY.copy(), tmp_store)
+        ), pytest.raises(Exception):
+            adapter.build_index(DATASET_ID, FIXTURE_ARRAY.copy(), tmp_store)
 
         leaked = [
             p for p in tmp_store.iterdir()

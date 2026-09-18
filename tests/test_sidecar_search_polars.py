@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 import pytest
+
 from arro_server.arrowspace_adapter import _SidecarAdapter
 from arro_server.errors import MetadataUnavailable
 
