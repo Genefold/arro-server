@@ -35,7 +35,7 @@ import pytest
 import zarr
 from fastapi.testclient import TestClient
 
-from arro_server.api.routes import _assert_path_within_roots, _validate_zarr_summary
+from arro_server.api.routes import _arrowspace, _assert_path_within_roots, _validate_zarr_summary
 from arro_server.storage import registry as registry_mod
 from arro_server.storage.base import DatasetHandle, DatasetSummary
 
@@ -157,7 +157,9 @@ def test_upload_commit_valid_registers_dataset(app_client):
     """Full two-phase upload: init -> write Zarr -> commit -> visible in GET /datasets."""
     client, _ = app_client
 
-    init_resp = client.post("/api/upload/init", json={"dataset_id": "main--embeddings", "root": "main"})
+    init_resp = client.post(
+        "/api/upload/init", json={"dataset_id": "main--embeddings", "root": "main"}
+    )
     assert init_resp.status_code == 200
     upload_path = Path(init_resp.json()["upload_path"])
 
@@ -227,11 +229,11 @@ def test_upload_commit_overwrite_returns_index_stale(app_client):
 
     mock_adapter = MagicMock()
     mock_adapter.has_index.return_value = True
-    with patch("arro_server.api.routes.load_arrowspace", return_value=mock_adapter):
-        resp = client.post(
-            "/api/upload/commit",
-            json={"dataset_id": "main--has_index", "fs_path": str(zarr_path)},
-        )
+    client.app.dependency_overrides[_arrowspace] = lambda: mock_adapter
+    resp = client.post(
+        "/api/upload/commit",
+        json={"dataset_id": "main--has_index", "fs_path": str(zarr_path)},
+    )
     assert resp.status_code == 200
     assert resp.json()["index_stale"] is True
 
@@ -263,8 +265,10 @@ def test_upload_commit_incomplete_zarr_returns_422(app_client):
         fs_path=zarr_path,
     )
 
-    with patch("arro_server.storage.registry.StorageRegistry.register_dataset"), \
-         patch("arro_server.storage.registry.StorageRegistry.open", return_value=incomplete_handle):
+    with (
+        patch("arro_server.storage.registry.StorageRegistry.register_dataset"),
+        patch("arro_server.storage.registry.StorageRegistry.open", return_value=incomplete_handle),
+    ):
         resp = client.post(
             "/api/upload/commit",
             json={"dataset_id": "main--incomplete", "fs_path": str(zarr_path)},

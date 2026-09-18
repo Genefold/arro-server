@@ -22,6 +22,9 @@ class SearchEnergyRequest(BaseModel):
     """Body for POST /datasets/{id}/search/energy.
 
     Real arrowspace signature: search_energy(vec, gl, k)
+
+    NOTE: currently returns 501 — energy search reads energymaps, produced
+    only by ArrowSpaceBuilder.build_energy, which arro-server does not call.
     """
 
     vector: list[float] = Field(..., description="Query vector (float64 values).")
@@ -99,7 +102,15 @@ class SearchModeRequest(BaseModel):
     )
     tau: float = Field(1.0, description="Tau param for taumode.")
     alpha: float = Field(0.5, ge=0.0, le=1.0, description="Blend for hybrid mode.")
-    k: int = Field(10, ge=1, description="Top-k for energy and linear_sorted.")
+    k: int | None = Field(
+        None,
+        ge=1,
+        description=(
+            "Top-k. taumode: truncates the result list (None keeps the index's "
+            "topk). linear_sorted: None falls back to 10. energy: rejected with "
+            "501 — requires energymaps, which arro-server does not build."
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -365,7 +376,8 @@ class TunedParamsSchema(BaseModel):
         topk:     Retrieval neighbour count at query time.  1 <= topk <= k.
         p:        Minkowski p-norm.  Must be > 0.
         sigma:    RBF kernel bandwidth, or None (allowed per tuner contract).
-        score:    Tuning objective score (0.0 - 1.0).
+        score:    Tuning objective score. Unbounded above 0.0 — the composite
+                  objective is 0.7*mrr + 0.2*log1p(fiedler) + 0.1*log1p(var).
         tuned_at: ISO 8601 UTC timestamp of when tuning completed.
         dataset:  Dataset this result belongs to.
     """
@@ -375,7 +387,12 @@ class TunedParamsSchema(BaseModel):
     topk: int = Field(..., ge=1)
     p: float = Field(..., gt=0.0)
     sigma: float | None = Field(default=None, gt=0.0)
-    score: float = Field(..., ge=0.0, le=1.0)
+    score: float = Field(
+        ...,
+        ge=0.0,
+        description="Tuning objective score. Unbounded above — composite of MRR, "
+        "Fiedler and lambda-variance terms.",
+    )
     tuned_at: str = Field(
         ...,
         description="ISO 8601 UTC timestamp, e.g. '2026-09-17T14:00:00+00:00'.",

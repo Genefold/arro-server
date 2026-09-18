@@ -38,6 +38,7 @@ from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 # ---------------------------------------------------------------------------
@@ -533,9 +534,12 @@ class TestAdapterSearch:
         with pytest.raises(MetadataUnavailable):
             built_adapter.search_batch("test/ds", {"tau": 1.0})
 
-    def test_search_energy(self, built_adapter):
-        result = built_adapter.search_energy("test/ds", {"vector": VECTOR})
-        assert result["backend"] == "arrowspace"
+    def test_search_energy_501_without_energymaps(self, built_adapter):
+        """search_energy is unimplemented without build_energy energymaps."""
+        with pytest.raises(HTTPException) as exc_info:
+            built_adapter.search_energy("test/ds", {"vector": VECTOR})
+        assert exc_info.value.status_code == 501
+        assert "build_energy" in exc_info.value.detail
 
     def test_search_hybrid(self, built_adapter):
         result = built_adapter.search_hybrid("test/ds", {"vector": VECTOR, "alpha": 0.5})
@@ -912,9 +916,9 @@ class TestItemsPagination:
 
     def test_items_window_never_exceeds_limit(self, built_client: TestClient):
         """aspace.get_item must only be called for indices inside the window."""
-        from arro_server.arrowspace_adapter import load
-
-        entry = load()._cache.get(DATASET_ID)
+        # Read the cache of the same adapter instance the routes use
+        # (parked on app.state by the lifespan), not a fresh load().
+        entry = built_client.app.state.arrowspace_adapter._cache.get(DATASET_ID)
         calls: list[int] = []
         original = entry.aspace.get_item
 
@@ -946,9 +950,10 @@ class TestSearchVariants:
         assert "index" in body["results"][0]
         assert "score" in body["results"][0]
 
-    def test_search_energy(self, built_client: TestClient):
-        body = self._post(built_client, "search/energy", {"vector": VECTOR})
-        assert body["backend"] == "arrowspace"
+    def test_search_energy_501_without_energymaps(self, built_client: TestClient):
+        r = built_client.post(f"/api/datasets/{DATASET_ID}/search/energy", json={"vector": VECTOR})
+        assert r.status_code == 501
+        assert "build_energy" in r.json()["detail"]
 
     def test_search_hybrid(self, built_client: TestClient):
         body = self._post(
@@ -1192,9 +1197,7 @@ class TestSidecarSearchParity:
 
         d = tmp_path / "_arrowspace"
         d.mkdir()
-        (d / "index.json").write_text(
-            json.dumps({"items": [{"id": "a", "tags": ["x"]}]})
-        )
+        (d / "index.json").write_text(json.dumps({"items": [{"id": "a", "tags": ["x"]}]}))
 
         adapter = _SidecarAdapter()
         results = adapter.sidecar_search(tmp_path, "zzz", limit=5)

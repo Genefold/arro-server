@@ -22,11 +22,13 @@ import os
 import sys
 import types
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
+
+from arro_server.api.routes import _arrowspace
 
 DATASET_ID = "main--matrix"
 APPEND_URL = f"/api/datasets/{DATASET_ID}/vectors/append"
@@ -114,9 +116,7 @@ def live_index_client(tmp_path: Path):
     root_dir = tmp_path / "data"
     root_dir.mkdir()
     zarr_dir = root_dir / "matrix"
-    arr = zarr.open(
-        str(zarr_dir), mode="w", shape=(50, 4), chunks=(10, 4), dtype="float32"
-    )
+    arr = zarr.open(str(zarr_dir), mode="w", shape=(50, 4), chunks=(10, 4), dtype="float32")
     arr[:] = np.arange(50 * 4, dtype="float32").reshape(50, 4)
 
     index_store = tmp_path / "index_store"
@@ -153,8 +153,8 @@ def test_append_reports_index_stale_true(app_client):
     client, _ = app_client
     mock_adapter = MagicMock()
     mock_adapter.has_index.return_value = True
-    with patch("arro_server.api.routes.load_arrowspace", return_value=mock_adapter):
-        resp = client.post(APPEND_URL, json=APPEND_BODY)
+    client.app.dependency_overrides[_arrowspace] = lambda: mock_adapter
+    resp = client.post(APPEND_URL, json=APPEND_BODY)
     assert resp.status_code == 200, resp.json()
     assert resp.json()["index_stale"] is True
     mock_adapter.has_index.assert_called_once_with(DATASET_ID)
@@ -165,8 +165,8 @@ def test_append_reports_index_stale_false_no_index(app_client):
     client, _ = app_client
     mock_adapter = MagicMock()
     mock_adapter.has_index.return_value = False
-    with patch("arro_server.api.routes.load_arrowspace", return_value=mock_adapter):
-        resp = client.post(APPEND_URL, json=APPEND_BODY)
+    client.app.dependency_overrides[_arrowspace] = lambda: mock_adapter
+    resp = client.post(APPEND_URL, json=APPEND_BODY)
     assert resp.status_code == 200, resp.json()
     assert resp.json()["index_stale"] is False
 
@@ -176,8 +176,8 @@ def test_overwrite_reports_index_stale_true(app_client):
     client, _ = app_client
     mock_adapter = MagicMock()
     mock_adapter.has_index.return_value = True
-    with patch("arro_server.api.routes.load_arrowspace", return_value=mock_adapter):
-        resp = client.post(OVERWRITE_URL, json=OVERWRITE_BODY)
+    client.app.dependency_overrides[_arrowspace] = lambda: mock_adapter
+    resp = client.post(OVERWRITE_URL, json=OVERWRITE_BODY)
     assert resp.status_code == 200, resp.json()
     assert resp.json()["index_stale"] is True
     mock_adapter.has_index.assert_called_once_with(DATASET_ID)
@@ -188,8 +188,8 @@ def test_overwrite_reports_index_stale_false_no_index(app_client):
     client, _ = app_client
     mock_adapter = MagicMock()
     mock_adapter.has_index.return_value = False
-    with patch("arro_server.api.routes.load_arrowspace", return_value=mock_adapter):
-        resp = client.post(OVERWRITE_URL, json=OVERWRITE_BODY)
+    client.app.dependency_overrides[_arrowspace] = lambda: mock_adapter
+    resp = client.post(OVERWRITE_URL, json=OVERWRITE_BODY)
     assert resp.status_code == 200, resp.json()
     assert resp.json()["index_stale"] is False
 

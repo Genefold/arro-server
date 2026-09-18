@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 
 import pytest
 from starlette.testclient import TestClient
@@ -15,7 +14,6 @@ def client(configured_app):
 
 @pytest.fixture
 def client_with_token(tmp_zarr_root):
-    import os
 
     from arro_server import arrowspace_adapter
     from arro_server import settings as settings_mod

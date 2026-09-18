@@ -1,4 +1,5 @@
 """Tests for TuneRequest, TunedParamsSchema, TuneStatusResponse."""
+
 from __future__ import annotations
 
 import pytest
@@ -34,6 +35,7 @@ def valid_request(**overrides) -> dict:
 # ---------------------------------------------------------------------------
 # TuneRequest
 # ---------------------------------------------------------------------------
+
 
 class TestTuneRequest:
     def test_minimal_valid(self):
@@ -122,6 +124,7 @@ class TestTuneRequest:
 # TunedParamsSchema
 # ---------------------------------------------------------------------------
 
+
 class TestTunedParamsSchema:
     def test_valid_construction(self):
         p = TunedParamsSchema(**VALID_PARAMS)
@@ -163,9 +166,12 @@ class TestTunedParamsSchema:
         with pytest.raises(ValidationError, match="score"):
             TunedParamsSchema(**{**VALID_PARAMS, "score": -0.01})
 
-    def test_score_above_one_raises(self):
-        with pytest.raises(ValidationError, match="score"):
-            TunedParamsSchema(**{**VALID_PARAMS, "score": 1.01})
+    def test_score_above_one_allowed(self):
+        # The tuner objective is 0.7*mrr + 0.2*log1p(fiedler) + 0.1*log1p(var)
+        # — unbounded above 1.0. 2.137 is a real tuner output (#F1, issue #67
+        # follow-up); the schema must not reject it.
+        p = TunedParamsSchema(**{**VALID_PARAMS, "score": 2.137})
+        assert p.score == 2.137
 
     def test_score_boundary_zero(self):
         p = TunedParamsSchema(**{**VALID_PARAMS, "score": 0.0})
@@ -191,6 +197,7 @@ class TestTunedParamsSchema:
     def test_from_attributes_orm_mode(self):
         """Verify from_attributes=True so TunedParams dataclass can be fed directly."""
         from arro_server.storage.tune_store import TunedParams
+
         tp = TunedParams(**VALID_PARAMS)
         schema = TunedParamsSchema.model_validate(tp, from_attributes=True)
         assert schema.eps == tp.eps
@@ -206,6 +213,7 @@ class TestTunedParamsSchema:
 # ---------------------------------------------------------------------------
 # TuneStatusResponse
 # ---------------------------------------------------------------------------
+
 
 class TestTuneStatusResponse:
     def test_not_started_no_params(self):
