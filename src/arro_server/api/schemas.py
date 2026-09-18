@@ -22,6 +22,9 @@ class SearchEnergyRequest(BaseModel):
     """Body for POST /datasets/{id}/search/energy.
 
     Real arrowspace signature: search_energy(vec, gl, k)
+
+    NOTE: currently returns 501 — energy search reads energymaps, produced
+    only by ArrowSpaceBuilder.build_energy, which arro-server does not call.
     """
 
     vector: list[float] = Field(..., description="Query vector (float64 values).")
@@ -99,7 +102,15 @@ class SearchModeRequest(BaseModel):
     )
     tau: float = Field(1.0, description="Tau param for taumode.")
     alpha: float = Field(0.5, ge=0.0, le=1.0, description="Blend for hybrid mode.")
-    k: int = Field(10, ge=1, description="Top-k for energy and linear_sorted.")
+    k: int | None = Field(
+        None,
+        ge=1,
+        description=(
+            "Top-k. taumode: truncates the result list (None keeps the index's "
+            "topk). linear_sorted: None falls back to 10. energy: rejected with "
+            "501 — requires energymaps, which arro-server does not build."
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
