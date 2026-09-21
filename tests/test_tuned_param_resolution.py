@@ -1,7 +1,8 @@
 """Tests for Issue #68 — tuned param resolution in build_index.
 
-Priority chain: user_params > TuneStore > DEFAULT_GRAPH_PARAMS.
-TuneStore is a MagicMock — no real persistence needed.
+Priority: user_params merged over TuneStore > DEFAULT_GRAPH_PARAMS (#80).
+Partial user_params override individual keys; missing keys fall through to
+tuned or default values. TuneStore is a MagicMock — no real persistence needed.
 """
 
 from __future__ import annotations
@@ -87,7 +88,8 @@ class TestResolveGraphParams:
         store.get.return_value = make_tuned()
         user = {"eps": 2.0}
         gp, source = self._adapter(store, fake_mod)._resolve_graph_params(DATASET_ID, user)
-        assert gp is user
+        # user keys win; missing keys fall through to the tuned baseline (#80)
+        assert gp == {"eps": 2.0, "k": 20, "topk": 15, "p": 1.9, "sigma": 0.7}
         assert source == "user"
 
     def test_tuned_fallback(self, fake_mod):
@@ -109,14 +111,31 @@ class TestResolveGraphParams:
         assert gp is DEFAULT_GRAPH_PARAMS
         assert source == "default"
 
-    def test_partial_user_params_not_merged(self, fake_mod):
+    def test_partial_user_params_merged_over_default(self, fake_mod):
         store = MagicMock()
-        store.get.return_value = make_tuned()
+        store.get.return_value = None
         user = {"eps": 2.0}
         gp, source = self._adapter(store, fake_mod)._resolve_graph_params(DATASET_ID, user)
-        assert gp == {"eps": 2.0}
-        assert "k" not in gp
         assert source == "user"
+        assert gp["eps"] == 2.0
+        assert gp["k"] == DEFAULT_GRAPH_PARAMS["k"]
+        assert gp["topk"] == DEFAULT_GRAPH_PARAMS["topk"]
+        assert gp["p"] == DEFAULT_GRAPH_PARAMS["p"]
+        assert gp["sigma"] == DEFAULT_GRAPH_PARAMS["sigma"]
+
+    def test_default_graph_params_dict_not_mutated_by_merge(self, fake_mod):
+        """The merge must not leak user keys into DEFAULT_GRAPH_PARAMS."""
+        store = MagicMock()
+        store.get.return_value = None
+        user = {"eps": 2.0, "k": 99}
+        self._adapter(store, fake_mod)._resolve_graph_params(DATASET_ID, user)
+        assert DEFAULT_GRAPH_PARAMS == {
+            "eps": 1.31,
+            "k": 30,
+            "topk": 30,
+            "p": 1.8,
+            "sigma": 0.535,
+        }
 
     def test_tuned_sigma_none_falls_back_to_default(self, fake_mod):
         store = MagicMock()
@@ -159,11 +178,18 @@ class TestBuildIndexResolution:
         }
         assert fake_mod.captured["graph_params"]["sigma"] == expected_sigma
 
-    def test_manifest_records_user_params_as_given(self, fake_mod, tmp_path: Path):
+    def test_manifest_records_merged_user_params(self, fake_mod, tmp_path: Path):
         store = MagicMock()
         store.get.return_value = make_tuned()
         adapter = _ArrowSpaceAdapter(fake_mod, cache_size=1, tune_store=store)
         user = {"eps": 2.0}
         adapter.build_index(DATASET_ID, np.zeros((4, 3)), tmp_path, graph_params=user)
         manifest = json.loads((tmp_path / MANIFEST_FILENAME).read_text())
-        assert manifest[DATASET_ID]["graph_params"] == user
+        # user eps wins, remaining keys filled from the tuned baseline (#80)
+        assert manifest[DATASET_ID]["graph_params"] == {
+            "eps": 2.0,
+            "k": 20,
+            "topk": 15,
+            "p": 1.9,
+            "sigma": 0.7,
+        }

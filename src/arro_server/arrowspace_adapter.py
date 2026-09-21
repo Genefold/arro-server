@@ -597,13 +597,13 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
         dataset_id: str,
         user_params: dict[str, Any] | None,
     ) -> tuple[dict[str, Any], str]:
-        """Resolve graph params: user_params > TuneStore > DEFAULT_GRAPH_PARAMS.
+        """Resolve graph params: user_params merged over (tuned > default).
 
         Returns ``(params, source)`` with source in {'user', 'tuned', 'default'};
-        used for logging only.  User params always win and are never merged.
+        used for logging only.  Partial user_params override individual keys;
+        missing keys fall through to tuned or default values, so the Rust
+        builder always receives all five required keys (issue #80).
         """
-        if user_params is not None:
-            return user_params, "user"
         if self._tune_store is not None:
             tuned = self._tune_store.get(dataset_id)
             if tuned is not None:
@@ -612,8 +612,15 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
                 # builder needs a float — fall back to the default bandwidth.
                 if gp.get("sigma") is None:
                     gp["sigma"] = DEFAULT_GRAPH_PARAMS["sigma"]
-                return gp, "tuned"
-        return DEFAULT_GRAPH_PARAMS, "default"
+                base, base_source = gp, "tuned"
+            else:
+                base, base_source = DEFAULT_GRAPH_PARAMS, "default"
+        else:
+            base, base_source = DEFAULT_GRAPH_PARAMS, "default"
+
+        if user_params is not None:
+            return {**base, **user_params}, "user"  # partial override
+        return base, base_source
 
     @staticmethod
     def _new_dataset_name(slug: str) -> str:
