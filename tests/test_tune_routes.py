@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import threading
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -194,6 +196,58 @@ class TestPostTune:
 
         assert response.status_code == 422
         adapter.launch.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Concurrency — guard → export → launch must be atomic per dataset (#80)
+# ---------------------------------------------------------------------------
+
+
+class TestConcurrentPostTune:
+    async def test_concurrent_posts_serialize_to_one_launch(
+        self, settings: Settings, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Two POSTs while the first is mid-export: second must not launch.
+
+        Deterministic interleave: the first request parks inside the gated
+        export while holding the per-dataset lock; the second must suspend on
+        the lock and only re-check is_running() after the first has launched.
+        """
+        from arro_server.api import tune_router
+
+        reg = mock_registry(nrows=12, ncols=4)
+        adapter = mock_adapter(running=False)
+
+        def launch(dataset_id, npy_path, **kwargs):
+            adapter.is_running.return_value = True
+
+        adapter.launch = MagicMock(side_effect=launch)
+
+        export_started = threading.Event()
+        release_export = threading.Event()
+        real_export = tune_router._export_dataset_to_npy
+
+        def gated_export(dataset_id, reg_, settings_):
+            export_started.set()
+            release_export.wait(timeout=5)
+            return real_export(dataset_id, reg_, settings_)
+
+        monkeypatch.setattr(tune_router, "_export_dataset_to_npy", gated_export)
+
+        async with AsyncClient(
+            transport=ASGITransport(app=build_app(adapter, reg, settings)),
+            base_url="http://test",
+        ) as client:
+            t1 = asyncio.create_task(client.post("/api/datasets/race--probe/tune"))
+            t2 = asyncio.create_task(client.post("/api/datasets/race--probe/tune"))
+            # to_thread keeps the loop free: this resolves only once the first
+            # request holds the lock and is parked inside the gated export.
+            assert await asyncio.wait_for(asyncio.to_thread(export_started.wait, 5), timeout=10)
+            release_export.set()
+            r1, r2 = await asyncio.gather(t1, t2)
+
+        adapter.launch.assert_called_once()
+        assert sorted(r.json()["status"] for r in (r1, r2)) == ["running", "started"]
 
 
 # ---------------------------------------------------------------------------
