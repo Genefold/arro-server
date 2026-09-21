@@ -151,7 +151,14 @@ class TestHttpBuildUsesTunedParams:
             )
 
         assert resp.status_code == 200, resp.text
-        assert resp.json()["graph_params"] == {"eps": 2.0}
+        # explicit eps wins; missing keys fall through to the tuned baseline (#80)
+        assert resp.json()["graph_params"] == {
+            "eps": 2.0,
+            "k": 10,
+            "topk": 5,
+            "p": 2.0,
+            "sigma": 0.5,
+        }
 
     def test_no_tuned_entry_falls_back_to_defaults(self, wired_app):
         with TestClient(wired_app) as client:
