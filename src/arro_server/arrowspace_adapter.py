@@ -19,6 +19,7 @@ ArrowSpace object public surface::
     aspace.lambdas()       -> np.ndarray          eigenvalue vector
     aspace.lambdas_sorted()-> List[(float, int)]  sorted (value, original_index)
     aspace.search(vec, gl, tau)             -> List[(int, float)]
+        # query-time k (vec, gl, tau, k) only on arrowspace>=0.28.1
     aspace.search_batch(vecs, gl, tau)      -> List[List[(int, float)]]
     aspace.search_energy(vec, gl, k)        -> List[(int, float)]
     aspace.search_hybrid(vec, gl, alpha)    -> List[(int, float)]
@@ -64,6 +65,7 @@ Note on ``build_and_store()`` vs ``build()``:
 
 from __future__ import annotations
 
+import importlib.metadata
 import json
 import logging
 import os
@@ -80,6 +82,7 @@ from typing import Any
 import numpy as np
 import polars as pl
 from fastapi import HTTPException
+from packaging.version import Version
 
 from .errors import MetadataUnavailable, OptionalDependencyMissing
 from .settings import get_settings
@@ -98,7 +101,27 @@ DEFAULT_GRAPH_PARAMS: dict[str, Any] = {
 
 DEFAULT_SEARCH_K: int = 10
 
+# Query-time k (search(item, gl, tau, k)) landed in arrowspace 0.28.1; the
+# declared minimum 0.26.2 accepts only search(item, gl, tau). Capability is
+# decided from installed distribution metadata before the call, never by
+# catching a TypeError and guessing from the callable's signature (issue #80).
+_QUERY_K_MIN_VERSION = Version("0.28.1")
+
 MANIFEST_FILENAME = "index_manifest.json"
+
+
+def _query_k_supported() -> bool:
+    """Return whether the installed arrowspace accepts a query-time k.
+
+    Reads the installed distribution version because the arrowspace module
+    exposes no ``__version__``. Raises OptionalDependencyMissing when the
+    distribution metadata is absent, rather than assuming a capability.
+    """
+    try:
+        installed = importlib.metadata.version("arrowspace")
+    except importlib.metadata.PackageNotFoundError as exc:
+        raise OptionalDependencyMissing("arrowspace", "query-time k version check") from exc
+    return Version(installed) >= _QUERY_K_MIN_VERSION
 
 
 @dataclass(frozen=True)
@@ -1106,26 +1129,14 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
         tau = float(query.get("tau", 1.0))
         # Library signature: search(item, gl, tau, k=None) on arrowspace>=0.28;
         # 0.26.x has no k parameter. k=None keeps the index's topk; an explicit
-        # k truncates the result list where supported.
+        # k truncates the result list where supported. The capability is checked
+        # before the call so a genuine TypeError from inside search() is never
+        # relabelled as "version unsupported" (issue #80).
         k = query.get("k")
         if k is None:
             hits = entry.aspace.search(q_arr, entry.gl, tau)
         else:
-            try:
-                hits = entry.aspace.search(q_arr, entry.gl, tau, k)
-            except TypeError:
-                # Distinguish "installed library has no k parameter" from any
-                # genuine TypeError raised by the call itself. Introspect the
-                # callable actually bound to this index's aspace; tolerate
-                # doubles whose signatures cannot be introspected.
-                import inspect
-
-                try:
-                    params = inspect.signature(entry.aspace.search).parameters
-                except (ValueError, TypeError, AttributeError):
-                    params = {}
-                if "k" in params:
-                    raise
+            if not _query_k_supported():
                 raise HTTPException(
                     status_code=501,
                     detail=(
@@ -1133,7 +1144,8 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
                         "(search(item, gl, tau, k)); the installed version "
                         "does not support it."
                     ),
-                ) from None
+                )
+            hits = entry.aspace.search(q_arr, entry.gl, tau, k)
         return {
             "backend": "arrowspace",
             "results": [{"index": int(i), "score": float(s)} for i, s in hits],
