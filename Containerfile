@@ -53,7 +53,7 @@ USER appuser
 
 EXPOSE 8000
 ENV ARRO_SERVER_HOST=0.0.0.0 \
-    ARRO_SERVER_PORT=8000
+    ARRO_BIND_PORT=8000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')" || exit 1
