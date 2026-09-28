@@ -18,8 +18,7 @@ ArrowSpace object public surface::
     aspace.nclusters       int
     aspace.lambdas()       -> np.ndarray          eigenvalue vector
     aspace.lambdas_sorted()-> List[(float, int)]  sorted (value, original_index)
-    aspace.search(vec, gl, tau)             -> List[(int, float)]
-        # query-time k (vec, gl, tau, k) only on arrowspace>=0.28.1
+    aspace.search(vec, gl, tau, k=None)     -> List[(int, float)]
     aspace.search_batch(vecs, gl, tau)      -> List[List[(int, float)]]
     aspace.search_energy(vec, gl, k)        -> List[(int, float)]
     aspace.search_hybrid(vec, gl, alpha)    -> List[(int, float)]
@@ -65,7 +64,6 @@ Note on ``build_and_store()`` vs ``build()``:
 
 from __future__ import annotations
 
-import importlib.metadata
 import json
 import logging
 import os
@@ -82,7 +80,6 @@ from typing import Any
 import numpy as np
 import polars as pl
 from fastapi import HTTPException
-from packaging.version import Version
 
 from .errors import MetadataUnavailable, OptionalDependencyMissing
 from .settings import get_settings
@@ -101,27 +98,7 @@ DEFAULT_GRAPH_PARAMS: dict[str, Any] = {
 
 DEFAULT_SEARCH_K: int = 10
 
-# Query-time k (search(item, gl, tau, k)) landed in arrowspace 0.28.1; the
-# declared minimum 0.26.2 accepts only search(item, gl, tau). Capability is
-# decided from installed distribution metadata before the call, never by
-# catching a TypeError and guessing from the callable's signature (issue #80).
-_QUERY_K_MIN_VERSION = Version("0.28.1")
-
 MANIFEST_FILENAME = "index_manifest.json"
-
-
-def _query_k_supported() -> bool:
-    """Return whether the installed arrowspace accepts a query-time k.
-
-    Reads the installed distribution version because the arrowspace module
-    exposes no ``__version__``. Raises OptionalDependencyMissing when the
-    distribution metadata is absent, rather than assuming a capability.
-    """
-    try:
-        installed = importlib.metadata.version("arrowspace")
-    except importlib.metadata.PackageNotFoundError as exc:
-        raise OptionalDependencyMissing("arrowspace", "query-time k version check") from exc
-    return Version(installed) >= _QUERY_K_MIN_VERSION
 
 
 @dataclass(frozen=True)
@@ -1127,24 +1104,14 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
         entry = self._get_entry(dataset_id)
         q_arr = self._vec(query)
         tau = float(query.get("tau", 1.0))
-        # Library signature: search(item, gl, tau, k=None) on arrowspace>=0.28;
-        # 0.26.x has no k parameter. k=None keeps the index's topk; an explicit
-        # k truncates the result list where supported. The capability is checked
-        # before the call so a genuine TypeError from inside search() is never
-        # relabelled as "version unsupported" (issue #80).
+        # Library signature: search(item, gl, tau, k=None) on arrowspace>=0.28.1
+        # (the declared minimum). k=None keeps the index's topk; an explicit k
+        # truncates the result list. No version probing: a TypeError from inside
+        # search() is a real failure and propagates (issue #80).
         k = query.get("k")
         if k is None:
             hits = entry.aspace.search(q_arr, entry.gl, tau)
         else:
-            if not _query_k_supported():
-                raise HTTPException(
-                    status_code=501,
-                    detail=(
-                        "k is only supported by arrowspace>=0.28.1 "
-                        "(search(item, gl, tau, k)); the installed version "
-                        "does not support it."
-                    ),
-                )
             hits = entry.aspace.search(q_arr, entry.gl, tau, k)
         return {
             "backend": "arrowspace",

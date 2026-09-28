@@ -18,8 +18,7 @@ dependencies = [
     "numpy>=1.26",
     "zarr>=3.0",
     "polars>=1.0",
-    "packaging>=23",
-    "arrowspace>=0.26.2",
+    "arrowspace>=0.28.1",
     "arrowspace-tuner>=0.5.0,<0.6",
 ]
 
