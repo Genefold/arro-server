@@ -1,22 +1,26 @@
 """taumode search must forward the request's k to the library.
 
-Library contract: search(item, gl, tau, k=None) on arrowspace>=0.28.1;
-0.26.x has no k parameter. The adapter forwards explicit k where supported
-and returns 501 otherwise; k absent keeps the index's topk on every version.
+Library contract: search(item, gl, tau, k=None) on arrowspace>=0.28.1 (the
+declared minimum). The adapter forwards explicit k directly; k absent keeps
+the index's topk. A real TypeError from inside search is never relabelled.
 """
 
 from __future__ import annotations
 
+import importlib.metadata
 from types import ModuleType
 from unittest.mock import MagicMock
 
+import arrowspace
 import numpy as np
 import pytest
-from fastapi import HTTPException
+from packaging.version import Version
 
-from arro_server.arrowspace_adapter import _ArrowSpaceAdapter
+from arro_server.arrowspace_adapter import _ArrowSpaceAdapter, _IndexEntry
 
 DATASET_ID = "test/ds"
+
+MIN_ARROWSPACE = Version("0.28.1")
 
 
 def make_adapter(tmp_path, search_impl=None) -> tuple[_ArrowSpaceAdapter, MagicMock]:
@@ -73,14 +77,45 @@ def test_search_default_tau(tmp_path):
     assert args[2] == 1.0
 
 
-def test_search_explicit_k_on_old_library_returns_501(tmp_path):
-    """arrowspace 0.26.x search(item, gl, tau) — explicit k must 501, not 500."""
+def test_typing_error_inside_search_propagates(tmp_path):
+    """A real TypeError from search must propagate, not become a 501."""
 
-    def old_search(item, gl, tau):
-        return [(0, 1.0)]
+    def bad_search(item, gl, tau, k):
+        raise TypeError("k must be an int")
 
-    adapter, _ = make_adapter(tmp_path, search_impl=old_search)
-    with pytest.raises(HTTPException) as exc_info:
+    adapter, _ = make_adapter(tmp_path, search_impl=bad_search)
+    with pytest.raises(TypeError, match="k must be an int"):
         adapter.search(DATASET_ID, {"vector": [0.0, 0.0], "tau": 1.0, "k": 1})
-    assert exc_info.value.status_code == 501
-    assert "0.28.1" in exc_info.value.detail
+
+
+def test_installed_arrowspace_supports_query_k():
+    """Real library: the resolved ArrowSpace is the k-capable minimum."""
+    installed = Version(importlib.metadata.version("arrowspace"))
+    assert installed >= MIN_ARROWSPACE, (
+        f"arrowspace {installed} installed; pyproject requires >=0.28.1"
+    )
+
+
+@pytest.mark.skipif(
+    Version(importlib.metadata.version("arrowspace")) < MIN_ARROWSPACE,
+    reason="needs arrowspace>=0.28.1 with query-time k",
+)
+def test_real_arrowspace_search_with_and_without_k(tmp_path):
+    """End-to-end against the real ArrowSpace binding, not a fake builder."""
+    rng = np.random.default_rng(42)
+    items = rng.standard_normal((64, 8)).astype(np.float64)
+    params = {"eps": 1.5, "k": 6, "topk": 5, "p": 2.0, "sigma": 1.0}
+    aspace, gl = arrowspace.ArrowSpaceBuilder().build(params, items)
+
+    adapter = _ArrowSpaceAdapter(arrowspace, cache_size=1)
+    adapter._cache.put(
+        DATASET_ID,
+        _IndexEntry(aspace=aspace, gl=gl, nitems=aspace.nitems, nfeatures=8, nclusters=1),
+    )
+
+    bare = adapter.search(DATASET_ID, {"vector": items[0].tolist(), "tau": 1.0})
+    capped = adapter.search(DATASET_ID, {"vector": items[0].tolist(), "tau": 1.0, "k": 3})
+
+    assert bare["backend"] == "arrowspace"
+    assert all("index" in r and "score" in r for r in bare["results"])
+    assert len(capped["results"]) <= 3

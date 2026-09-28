@@ -18,7 +18,7 @@ ArrowSpace object public surface::
     aspace.nclusters       int
     aspace.lambdas()       -> np.ndarray          eigenvalue vector
     aspace.lambdas_sorted()-> List[(float, int)]  sorted (value, original_index)
-    aspace.search(vec, gl, tau)             -> List[(int, float)]
+    aspace.search(vec, gl, tau, k=None)     -> List[(int, float)]
     aspace.search_batch(vecs, gl, tau)      -> List[List[(int, float)]]
     aspace.search_energy(vec, gl, k)        -> List[(int, float)]
     aspace.search_hybrid(vec, gl, alpha)    -> List[(int, float)]
@@ -1104,36 +1104,15 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
         entry = self._get_entry(dataset_id)
         q_arr = self._vec(query)
         tau = float(query.get("tau", 1.0))
-        # Library signature: search(item, gl, tau, k=None) on arrowspace>=0.28;
-        # 0.26.x has no k parameter. k=None keeps the index's topk; an explicit
-        # k truncates the result list where supported.
+        # Library signature: search(item, gl, tau, k=None) on arrowspace>=0.28.1
+        # (the declared minimum). k=None keeps the index's topk; an explicit k
+        # truncates the result list. No version probing: a TypeError from inside
+        # search() is a real failure and propagates (issue #80).
         k = query.get("k")
         if k is None:
             hits = entry.aspace.search(q_arr, entry.gl, tau)
         else:
-            try:
-                hits = entry.aspace.search(q_arr, entry.gl, tau, k)
-            except TypeError:
-                # Distinguish "installed library has no k parameter" from any
-                # genuine TypeError raised by the call itself. Introspect the
-                # callable actually bound to this index's aspace; tolerate
-                # doubles whose signatures cannot be introspected.
-                import inspect
-
-                try:
-                    params = inspect.signature(entry.aspace.search).parameters
-                except (ValueError, TypeError, AttributeError):
-                    params = {}
-                if "k" in params:
-                    raise
-                raise HTTPException(
-                    status_code=501,
-                    detail=(
-                        "k is only supported by arrowspace>=0.28.1 "
-                        "(search(item, gl, tau, k)); the installed version "
-                        "does not support it."
-                    ),
-                ) from None
+            hits = entry.aspace.search(q_arr, entry.gl, tau, k)
         return {
             "backend": "arrowspace",
             "results": [{"index": int(i), "score": float(s)} for i, s in hits],
