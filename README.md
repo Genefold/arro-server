@@ -213,3 +213,21 @@ unavailable the sidecar adapter is still functional.
 
 
 
+## ArrowSpace 0.29.0 compatibility
+
+The server pins `arrowspace==0.29.0`. Index builds use native
+`with_persistence(storage_path, dataset_name)` and write directly into the
+configured index store. A tested fallback remains for older installs.
+
+Analytics responses retain the `method` and `results` keys. Motif results are
+lists of index lists, and subgraph results are native metadata dictionaries,
+not search-style `{index, score}` hits. Eigen motifs are node-space IDs, not
+item IDs. Energy-only analytics return HTTP 422 on an EigenMaps index.
+ArrowSpace 0.29 does not restore the cluster bookkeeping needed by centroid
+analytics on reload; those calls also return HTTP 422 rather than leaking
+a native panic. Search and item retrieval work on reloaded indexes.
+Batch search preserves query positions: a degenerate row is returned as
+`null` in `results`, while valid rows retain their search hits.
+Tau search now returns exactly the configured `topk` rather than the extra
+neighbour returned by older releases. A small 0.26.2 index was successfully
+loaded and queried with 0.29.0; validate production data separately.

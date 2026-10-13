@@ -25,10 +25,10 @@ ArrowSpace object public surface::
     aspace.search_linear_sorted(vec, gl, k) -> List[(int, float)]
     aspace.get_item(i)     -> item at position i
     aspace.get_all_items() -> all items
-    aspace.spot_motives_eigen()    -> List[(int, float)]
-    aspace.spot_motives_energy()   -> List[(int, float)]
-    aspace.spot_subg_centroids()   -> List[(int, float)]
-    aspace.spot_subg_motives()     -> List[(int, float)]
+    aspace.spot_motives_eigen(gl, cfg)    -> List[List[int]] (node-space)
+    aspace.spot_motives_energy(gl, cfg)   -> List[List[int]] (energy builds)
+    aspace.spot_subg_centroids(gl, cfg)   -> List[dict]
+    aspace.spot_subg_motives(gl, cfg)     -> List[dict] (energy builds)
 
 GraphLaplacian object public surface::
 
@@ -51,15 +51,9 @@ Parquet files written by the Rust builder's ``with_persistence`` option.
 The dataset_name is generated as ``{slug}_{uuid}`` the first time an index is
 built, then recorded in the manifest so the same name is used on reload.
 
-Note on ``build_and_store()`` vs ``build()``:
-  ``ArrowSpaceBuilder.build_and_store()`` hardcodes the output directory to
-  ``CWD/storage/`` inside the Rust code and cannot be redirected.  Until
-  ``with_persistence()`` is exposed on the Python side, PATH 2 in
-  ``_build_with_persistence()`` works around this by diffing the directory
-  before/after, detecting the UUID prefix from file names, renaming every file
-  to use the canonical ``{dataset_name}`` prefix, and moving them atomically
-  into ``index_store``.  Once ``with_persistence`` lands, PATH 1 is preferred
-  and PATH 2 (this workaround) becomes dead code.
+ArrowSpace 0.29 exposes ``with_persistence(storage_path, dataset_name)``;
+``build(graph_params, array)`` writes directly into the configured store.
+The directory-diff workaround remains only for older, unsupported installs.
 """
 
 from __future__ import annotations
@@ -604,7 +598,7 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
                     mode="w",
                     shape=arr_val.shape,
                     dtype=arr_val.dtype,
-                    chunks=True,
+                    chunks=None,
                     zarr_format=3,
                 )
                 z[:] = arr_val
@@ -626,24 +620,23 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
 
         Three paths, tried in order:
 
-        PATH 1 (future, preferred)
+        PATH 1 (0.29, preferred)
             ``with_persistence`` is exposed on ``ArrowSpaceBuilder``.
             Builder is configured with the target ``index_store`` and
             ``dataset_name`` so Parquet files land directly at the correct
-            path.  When pyarrowspace exposes this method, this path is taken
-            automatically and paths 2/3 become dead code.
+            path. Graph parameters are passed to ``build``; the Python
+            builder does not expose ``with_lambda_graph``.
 
         PATH 2 (temporary fallback)
             ``build_and_store`` is exposed but ``with_persistence`` is not.
             ``build_and_store`` hardcodes its output to ``CWD/storage/``
             with a random UUID-based name.  We diff the directory before and
             after, discover the newly written Parquet files, rename them to
-            the canonical ``{dataset_name}_items.parquet`` /
-            ``{dataset_name}_graph.parquet``, and atomically move them into
+            the canonical ``{dataset_name}-raw_input.parquet`` /
+            ``{dataset_name}-gl-matrix.parquet``, and atomically move them into
             ``index_store``.
 
-            Once ``with_persistence`` lands in a future pyarrowspace release
-            this entire block is skipped and can be removed.
+            ArrowSpace 0.29 skips this legacy compatibility block.
 
         PATH 3 (last resort)
             ``build()`` without persistence.  Index lives in memory only.
@@ -654,16 +647,11 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
         gp = graph_params
 
         # ------------------------------------------------------------------
-        # PATH 1 — with_persistence available (future)
+        # PATH 1 — direct persistence (ArrowSpace 0.29)
         # ------------------------------------------------------------------
-        if hasattr(builder, "with_lambda_graph") and hasattr(builder, "with_persistence"):
-            rows: list[list[float]] = array.tolist()
-            builder = (
-                builder.with_lambda_graph(gp["eps"], gp["k"], gp["topk"], gp["p"], gp["sigma"])
-                .with_sparsity_check(False)
-                .with_persistence(str(index_store), dataset_name)
-            )
-            aspace, gl = builder.build(rows)
+        if hasattr(builder, "with_persistence"):
+            builder = builder.with_persistence(str(index_store), dataset_name)
+            aspace, gl = builder.build(gp, array)
             log.info(
                 "Persisted ArrowSpace Parquet for '%s' at %s (PATH 1)",
                 dataset_name,
@@ -996,7 +984,8 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
                 status_code=404,
                 detail=f"Item index {idx} out of range [0, {entry.nitems}).",
             )
-        vec = entry.aspace.get_item(idx)
+        raw = entry.aspace.get_item(idx)
+        vec = raw[0] if isinstance(raw, tuple) else raw
         return {
             "item_index": idx,
             "vector": [float(v) for v in vec],
@@ -1066,7 +1055,8 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
         return {
             "backend": "arrowspace",
             "results": [
-                [{"index": int(i), "score": float(s)} for i, s in hits] for hits in batch_hits
+                None if hits is None else [{"index": int(i), "score": float(s)} for i, s in hits]
+                for hits in batch_hits
             ],
         }
 
@@ -1100,36 +1090,37 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
             "results": [{"index": int(i), "score": float(s)} for i, s in hits],
         }
 
-    def _spot_hits(self, hits: Any) -> list[dict[str, Any]]:
-        return [{"index": int(i), "score": float(s)} for i, s in hits]
+    def _spot_results(self, dataset_id: str, method: str) -> dict[str, Any]:
+        """Preserve native motif lists/subgraph dictionaries, not search scores."""
+        entry = self._get_entry(dataset_id)
+        try:
+            results = getattr(entry.aspace, method)(entry.gl, {})
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except BaseException as exc:
+            # PyO3 panics inherit BaseException and cannot be imported from
+            # pyo3_runtime. Only translate the known 0.29 reload limitation;
+            # interrupts, exits and unrelated native panics must propagate.
+            if (
+                type(exc).__module__ == "pyo3_runtime"
+                and type(exc).__name__ == "PanicException"
+                and "centroid_map or cluster_assignments" in str(exc)
+            ):
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            raise
+        return {"method": method, "results": results}
 
     def spot_motives_eigen(self, dataset_id: str) -> dict[str, Any]:
-        entry = self._get_entry(dataset_id)
-        return {
-            "method": "spot_motives_eigen",
-            "results": self._spot_hits(entry.aspace.spot_motives_eigen()),
-        }
+        return self._spot_results(dataset_id, "spot_motives_eigen")
 
     def spot_motives_energy(self, dataset_id: str) -> dict[str, Any]:
-        entry = self._get_entry(dataset_id)
-        return {
-            "method": "spot_motives_energy",
-            "results": self._spot_hits(entry.aspace.spot_motives_energy()),
-        }
+        return self._spot_results(dataset_id, "spot_motives_energy")
 
     def spot_subg_centroids(self, dataset_id: str) -> dict[str, Any]:
-        entry = self._get_entry(dataset_id)
-        return {
-            "method": "spot_subg_centroids",
-            "results": self._spot_hits(entry.aspace.spot_subg_centroids()),
-        }
+        return self._spot_results(dataset_id, "spot_subg_centroids")
 
     def spot_subg_motives(self, dataset_id: str) -> dict[str, Any]:
-        entry = self._get_entry(dataset_id)
-        return {
-            "method": "spot_subg_motives",
-            "results": self._spot_hits(entry.aspace.spot_subg_motives()),
-        }
+        return self._spot_results(dataset_id, "spot_subg_motives")
 
     def graph_export(self, dataset_id: str, fmt: str) -> dict[str, Any]:
         entry = self._get_entry(dataset_id)

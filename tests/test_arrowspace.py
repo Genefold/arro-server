@@ -81,10 +81,10 @@ def _make_fake_aspace() -> MagicMock:
     aspace.search_energy.return_value = FAKE_HITS
     aspace.search_hybrid.return_value = FAKE_HITS
     aspace.search_linear_sorted.return_value = FAKE_HITS
-    aspace.spot_motives_eigen.return_value = FAKE_HITS
-    aspace.spot_motives_energy.return_value = FAKE_HITS
-    aspace.spot_subg_centroids.return_value = FAKE_HITS
-    aspace.spot_subg_motives.return_value = FAKE_HITS
+    aspace.spot_motives_eigen.return_value = [[i, i + 1] for i in range(5)]
+    aspace.spot_motives_energy.return_value = [[i, i + 1] for i in range(5)]
+    aspace.spot_subg_centroids.return_value = [{"node_indices": [i]} for i in range(5)]
+    aspace.spot_subg_motives.return_value = [{"node_indices": [i]} for i in range(5)]
     return aspace
 
 
@@ -1024,8 +1024,11 @@ class TestSpotMethods:
     def test_spot_result_schema(self, built_client: TestClient, endpoint: str, _: str):
         body = built_client.get(f"/api/datasets/{DATASET_ID}/{endpoint}").json()
         for result in body["results"]:
-            assert isinstance(result["index"], int)
-            assert isinstance(result["score"], float)
+            if endpoint.startswith("spot/motives/"):
+                assert isinstance(result, list)
+                assert all(isinstance(index, int) for index in result)
+            else:
+                assert isinstance(result["node_indices"], list)
 
     @pytest.mark.parametrize("endpoint,_", SPOT_ENDPOINTS)
     def test_spot_no_index(self, live_client: TestClient, endpoint: str, _: str):

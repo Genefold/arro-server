@@ -7,24 +7,19 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /build
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends gcc g++ libc6-dev curl \
-    && rm -rf /var/lib/apt/lists/*
-
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --no-modify-path
-ENV PATH="/root/.cargo/bin:${PATH}"
-
-RUN pip install maturin \
-    && pip install --prefix=/install --no-deps arrowspace
+# CPython 3.12 Linux x86_64/aarch64 wheels avoid a Rust build toolchain.
+RUN pip install --prefix=/install --only-binary=:all: --no-deps "arrowspace==0.29.0"
 
 RUN pip install --prefix=/install \
     "fastapi>=0.110" \
     "uvicorn[standard]>=0.27" \
     "pydantic>=2.6" \
     "pydantic-settings>=2.10.3" \
-    "numpy>=1.26" \
+    "numpy>=2.5.0" \
     "zarr>=3.0" \
-    "pyarrow>=15.0" \
+    "pyarrow>=23.0.0" \
+    "pandas>=3.0.0" \
+    "scikit-learn>=1.8.0" \
     "polars>=1.0"
 
 FROM python:3.12-slim AS runtime

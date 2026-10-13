@@ -47,10 +47,10 @@ def _make_mock_aspace() -> MagicMock:
         [(float(v), int(i)) for i, v in enumerate(lambdas)],
         key=lambda x: x[0],
     )
-    m.spot_motives_eigen.return_value = [(i, float(i * 0.1)) for i in range(5)]
-    m.spot_motives_energy.return_value = [(i, float(i * 0.2)) for i in range(5)]
-    m.spot_subg_centroids.return_value = [(i, float(i * 0.3)) for i in range(3)]
-    m.spot_subg_motives.return_value = [(i, float(i * 0.4)) for i in range(3)]
+    m.spot_motives_eigen.return_value = [[i, i + 1] for i in range(5)]
+    m.spot_motives_energy.return_value = [[i, i + 1] for i in range(5)]
+    m.spot_subg_centroids.return_value = [{"node_indices": [i]} for i in range(3)]
+    m.spot_subg_motives.return_value = [{"node_indices": [i]} for i in range(3)]
     m.search.return_value = [(i, float(i * 0.1)) for i in range(5)]
     m.search_batch.return_value = [
         [(i, float(i * 0.1)) for i in range(5)],
