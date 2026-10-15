@@ -42,13 +42,14 @@ POST /api/admin/reload                                     -- hot-reload Storage
 from __future__ import annotations
 
 import asyncio
+import logging
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 
 from .. import __version__
-from ..arrowspace_adapter import DEFAULT_GRAPH_PARAMS, ArrowSpaceAdapter
+from ..arrowspace_adapter import ArrowSpaceAdapter
 from ..arrowspace_adapter import load as load_arrowspace
 from ..errors import DatasetNotSliceable, InvalidSlice, OptionalDependencyMissing
 from ..settings import Settings, get_settings
@@ -73,6 +74,8 @@ from .schemas import (
     VectorOverwriteResponse,
 )
 from .serializers import array_to_payload
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api")
 admin_router = APIRouter(prefix="/api/admin")
@@ -170,8 +173,16 @@ def _registry() -> StorageRegistry:
     return get_registry()
 
 
-def _arrowspace() -> ArrowSpaceAdapter:
-    return load_arrowspace()
+def _arrowspace(request: Request) -> ArrowSpaceAdapter:
+    # Single adapter instance per app: the lifespan builds it with the
+    # TuneStore and parks it on app.state. Falling back to load() keeps
+    # apps without a lifespan (some test setups) working. A bare load()
+    # here would create a second lru-cache instance with tune_store=None,
+    # so tuned params never reached build_index and index caches diverged.
+    adapter = getattr(request.app.state, "arrowspace_adapter", None)
+    if adapter is not None:
+        return adapter
+    return load_arrowspace(getattr(request.app.state, "tune_store", None))
 
 
 # ---------------------------------------------------------------------------
@@ -196,6 +207,7 @@ def _require_admin_token(
 
 @admin_router.post("/reload", dependencies=[Depends(_require_admin_token)])
 async def admin_reload(
+    request: Request,
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
     """Invalidate all LRU caches and re-scan data_roots.
@@ -208,13 +220,24 @@ async def admin_reload(
     from ..storage.registry import get_registry, reset_registry_cache
 
     reset_registry_cache()  # marks _cache = None (invalidate, not singleton destroy)
+
+    tune_store = getattr(request.app.state, "tune_store", None)
+    if tune_store is None:
+        log.warning(
+            "admin_reload: app.state.tune_store not set (lifespan incomplete?); "
+            "rebuilt adapter will fall back to default graph_params"
+        )
+
     reset_adapter_cache()
 
     registry = get_registry()
     # TODO(multi-worker): replace asyncio.to_thread with ARQ/Celery task
     datasets = await asyncio.to_thread(registry.list_datasets)
 
-    new_adapter = load_adapter()
+    new_adapter = load_adapter(tune_store)
+    # Publish the rebuilt adapter: subsequent requests must use the same
+    # instance, otherwise index caches diverge between admin and routes.
+    request.app.state.arrowspace_adapter = new_adapter
     index_store = Path(settings.index_store).expanduser().resolve()
     try:
         # TODO(multi-worker): replace asyncio.to_thread with ARQ/Celery task
@@ -392,6 +415,7 @@ def vectors_append(
     dataset_id: str,
     body: VectorAppendRequest,
     reg: StorageRegistry = Depends(_registry),
+    adapter: ArrowSpaceAdapter = Depends(_arrowspace),
 ) -> VectorAppendResponse:
     """Append M new row-vectors to an existing 2-D Zarr array.
 
@@ -404,7 +428,8 @@ def vectors_append(
            so that concurrent reads see the correct shape immediately.
 
     Returns:
-        VectorAppendResponse with start_row, appended count, new_shape.
+        VectorAppendResponse with start_row, appended count, new_shape,
+        index_stale.
     """
     import numpy as np
 
@@ -422,12 +447,15 @@ def vectors_append(
     dtype = body.dtype if body.dtype else "float64"
     vecs = np.array(body.vectors, dtype=dtype)
 
+    index_stale = adapter.has_index(dataset_id)
+
     start_row, new_n = zarr_backend.append_vectors(dataset_id, vecs, registry=reg)
 
     return VectorAppendResponse(
         start_row=start_row,
         appended=int(vecs.shape[0]),
         new_shape=[new_n, int(vecs.shape[1])],
+        index_stale=index_stale,
     )
 
 
@@ -457,6 +485,7 @@ def vectors_overwrite(
     dataset_id: str,
     body: VectorOverwriteRequest,
     reg: StorageRegistry = Depends(_registry),
+    adapter: ArrowSpaceAdapter = Depends(_arrowspace),
 ) -> VectorOverwriteResponse:
     """Overwrite specific rows of an existing 2-D Zarr array.
 
@@ -471,8 +500,9 @@ def vectors_overwrite(
 
     Note:
         If an ArrowSpace index exists for this dataset, its in-memory
-        representation will not reflect the new vectors until the index
-        is rebuilt via POST /datasets/{id}/index.
+        representation will not reflect the new vectors until the index is
+        rebuilt via POST /datasets/{id}/index. The response field
+        ``index_stale`` signals this condition to the client.
     """
     from ..storage.base import decode_dataset_id
 
@@ -484,9 +514,11 @@ def vectors_overwrite(
             detail=f"Dataset '{dataset_id}' not found.",
         )
 
+    index_stale = adapter.has_index(dataset_id)
+
     dtype = body.dtype or "float64"
     overwritten = zarr_backend.overwrite_vectors(dataset_id, body.updates, dtype=dtype)
-    return VectorOverwriteResponse(overwritten=overwritten)
+    return VectorOverwriteResponse(overwritten=overwritten, index_stale=index_stale)
 
 
 # ---------------------------------------------------------------------------
@@ -562,8 +594,11 @@ def vectors_count(
 
 
 @router.get("/health")
-def health(settings: Settings = Depends(get_settings)) -> dict[str, Any]:
-    adapter = load_arrowspace()
+def health(
+    request: Request,
+    settings: Settings = Depends(get_settings),
+    adapter: ArrowSpaceAdapter = Depends(_arrowspace),
+) -> dict[str, Any]:
     return {
         "status": "ok",
         "version": __version__,
@@ -629,6 +664,15 @@ def dataset_data(
         # Window budget is scaled by the product of trailing dimensions so that
         # multi-dimensional arrays are bounded by total element count, not rows.
         enforce_window_budget(rs, settings.max_window * max(1, trailing_product(h.summary.shape)))
+        # Element-count guard (width-independent): the row budget alone allows
+        # max_window * product(shape[1:]) elements, which is far too much for
+        # wide datasets (e.g. 384-dim embeddings).
+        if rs.n_elements > settings.max_response_elements:
+            raise ValueError(
+                f"Request would return {rs.n_elements:,} elements; limit is "
+                f"{settings.max_response_elements:,} (ARRO_SERVER_MAX_RESPONSE_ELEMENTS). "
+                "Reduce limit/window or raise the cap."
+            )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     arr = h.read_window(rs)
@@ -655,6 +699,15 @@ def dataset_slice(
     try:
         rs = parse_slice(spec, h.summary.shape)
         enforce_window_budget(rs, settings.max_window * max(1, trailing_product(h.summary.shape)))
+        # Element-count guard (width-independent) — see dataset_data.
+        if rs.n_elements > settings.max_response_elements:
+            raise ValueError(
+                f"Request would return {rs.n_elements:,} elements; limit is "
+                f"{settings.max_response_elements:,} (ARRO_SERVER_MAX_RESPONSE_ELEMENTS). "
+                "Reduce limit/window or raise the cap."
+            )
+    # InvalidSlice subclasses ValueError (errors.py:26) — it must stay ahead of
+    # the ValueError handler below, which catches the element-cap guard's error.
     except InvalidSlice as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except DatasetNotSliceable as exc:
@@ -684,7 +737,7 @@ def dataset_stats(
     h = reg.open(dataset_id)
     # Use has_index() instead of reaching into _cache directly (encapsulation)
     if adapter.has_index(dataset_id):
-        stats = adapter.stats_data(dataset_id)  # type: ignore[attr-defined]
+        stats = adapter.stats_data(dataset_id)
         return {
             "id": dataset_id,
             "backend": adapter.backend,
@@ -721,7 +774,7 @@ def dataset_manifold(
     h = reg.open(dataset_id)
     # Use has_index() instead of reaching into _cache directly (encapsulation)
     if adapter.has_index(dataset_id):
-        data = adapter.manifold_data(dataset_id)  # type: ignore[attr-defined]
+        data = adapter.manifold_data(dataset_id)
         return {
             "id": dataset_id,
             "backend": adapter.backend,
@@ -779,22 +832,23 @@ async def build_index(
     rs = parse_slice(None, h.summary.shape, offset=0, limit=h.summary.shape[0])
     arr = h.read_window(rs)
     index_store = Path(settings.index_store).expanduser().resolve()
-    effective_params = body.graph_params or DEFAULT_GRAPH_PARAMS
+    # Pass body.graph_params through unmodified (None when absent) — the
+    # adapter resolves user > tuned > DEFAULT_GRAPH_PARAMS. Pre-injecting
+    # defaults here would defeat the TuneStore fallback.
     try:
-        # TODO(multi-worker): replace asyncio.to_thread with ARQ/Celery task
         meta = await asyncio.to_thread(
             adapter.build_index,
             dataset_id=dataset_id,
             array=arr,
             index_store=index_store,
-            graph_params=effective_params,
+            graph_params=body.graph_params,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {
         "id": dataset_id,
         "built": True,
-        "graph_params": effective_params,
+        "graph_params": meta["graph_params"],
         "nitems": meta["nitems"],
         "nfeatures": meta["nfeatures"],
         "nclusters": meta["nclusters"],

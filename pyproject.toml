@@ -19,6 +19,8 @@ dependencies = [
     "zarr>=3.0",
     "polars>=1.0",
     "arrowspace==0.29.0",
+    # Temporary immutable source pin until tuner 0.5.1 is published (tuner PR #45).
+    "arrowspace-tuner@https://github.com/Genefold/arrowspace_tuner/archive/729e3713656320680721273a7594d68a536a380b.tar.gz",
 ]
 
 [project.optional-dependencies]
@@ -38,6 +40,9 @@ arro-server = "arro_server.__main__:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/arro_server"]
+
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [tool.hatch.build.targets.wheel.shared-data]
 "frontend" = "share/arro_server/frontend"

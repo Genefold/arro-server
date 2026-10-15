@@ -215,6 +215,12 @@ unavailable the sidecar adapter is still functional.
 
 ## ArrowSpace 0.29.0 compatibility
 
+The tuner integration is retained. Published `arrowspace-tuner==0.5.0`
+requires ArrowSpace below 0.29, so the manifest temporarily pins the immutable
+0.5.1 source commit from [tuner PR #45](https://github.com/Genefold/arrowspace_tuner/pull/45).
+Replace that source reference with `arrowspace-tuner==0.5.1` after its PyPI
+release, then regenerate both the server and consuming workspace lockfiles.
+
 The server pins `arrowspace==0.29.0`. Index builds use native
 `with_persistence(storage_path, dataset_name)` and write directly into the
 configured index store. A tested fallback remains for older installs.

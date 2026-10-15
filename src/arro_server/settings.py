@@ -37,6 +37,11 @@ class Settings(BaseSettings):
     # returned in a single /data or /slice response. Note that for N-D arrays
     # the total element count is max_window * product(shape[1:]).
     max_window: int = 10_000
+    # max_response_elements: hard cap on the *total scalar element count*
+    # returned in a single /data or /slice response, regardless of row count.
+    # Prevents OOM on wide datasets (e.g. 384-dim embeddings) where the row
+    # budget alone is insufficient.
+    max_response_elements: int = 1_000_000
     # items_default_limit: rows returned by /datasets/{id}/items when ?limit
     # is omitted.
     items_default_limit: int = 50
@@ -53,6 +58,11 @@ class Settings(BaseSettings):
     # Optional static bearer token protecting /api/admin/* endpoints.
     # Leave unset (default None) for unauthenticated access (dev/private-network only).
     admin_token: str | None = None
+    # Path to the JSON file where per-dataset tuned ArrowSpace graph parameters
+    # are persisted. Resolved relative to CWD if not absolute.
+    # Default kept as ./tune_params.json (Issue #69 proposed ./data/tune_params.json;
+    # that default was already committed before this phase merged).
+    tune_params_path: str = "./tune_params.json"
 
     @field_validator("data_roots", "cors_origins", mode="before")
     @classmethod

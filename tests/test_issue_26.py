@@ -67,7 +67,7 @@ def test_concurrent_index_builds_complete_without_queueing(
     """
     zarr = pytest.importorskip("zarr")
     import numpy as np
-    from arro_server.arrowspace_adapter import load as load_arrowspace
+
     from arro_server.storage import registry as registry_mod
 
     # Create a second 2-D dataset so we can index two distinct datasets at once.
@@ -85,7 +85,9 @@ def test_concurrent_index_builds_complete_without_queueing(
     # next request. The app itself is reused via the configured_app fixture.
     registry_mod.get_registry.cache_clear()
 
-    adapter = load_arrowspace()
+    # The routes use the single adapter parked on app.state by the lifespan;
+    # patching a bare load_arrowspace() instance would patch the wrong object.
+    adapter = configured_app.state.arrowspace_adapter
 
     def slow_build(*args, **kwargs):
         # Simulate a CPU-bound build that blocks its worker thread briefly.
@@ -93,7 +95,7 @@ def test_concurrent_index_builds_complete_without_queueing(
         # this test exercises route-level concurrency, not the adapter's
         # internal build_and_store thread-safety (which is a separate concern).
         time.sleep(0.2)
-        return {"nitems": 50, "nfeatures": 4, "nclusters": 1}
+        return {"nitems": 50, "nfeatures": 4, "nclusters": 1, "graph_params": {"eps": 1.31}}
 
     monkeypatch.setattr(adapter, "build_index", slow_build)
 

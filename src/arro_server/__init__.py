@@ -1,3 +1,8 @@
 """arro-server: FastAPI server for Zarr v3 + ArrowSpace datasets."""
 
-__version__ = "0.1.0"
+from importlib.metadata import PackageNotFoundError, version
+
+try:
+    __version__ = version("arro-server")
+except PackageNotFoundError:
+    __version__ = "dev"

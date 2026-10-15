@@ -7,20 +7,17 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /build
 
-# CPython 3.12 Linux x86_64/aarch64 wheels avoid a Rust build toolchain.
-RUN pip install --prefix=/install --only-binary=:all: --no-deps "arrowspace==0.29.0"
+# Copy only what pip needs to resolve deps — avoids invalidating this layer on src changes
+COPY pyproject.toml README.md ./
 
-RUN pip install --prefix=/install \
-    "fastapi>=0.110" \
-    "uvicorn[standard]>=0.27" \
-    "pydantic>=2.6" \
-    "pydantic-settings>=2.10.3" \
-    "numpy>=2.5.0" \
-    "zarr>=3.0" \
-    "pyarrow>=23.0.0" \
-    "pandas>=3.0.0" \
-    "scikit-learn>=1.8.0" \
-    "polars>=1.0"
+# Single source of truth: install exactly what [project].dependencies declares.
+# ArrowSpace and the tuner are installed together in their own cached layer below.
+RUN pip install --prefix=/install $(python -c "import tomllib; deps = tomllib.load(open('pyproject.toml','rb'))['project']['dependencies']; print(' '.join(d for d in deps if not d.startswith('arrowspace')))")
+
+# CPython 3.12 Linux x86_64/aarch64 wheels avoid a Rust build toolchain.
+# Resolve both manifest requirements and their runtime dependencies together.
+RUN pip install --prefix=/install --only-binary=arrowspace \
+    $(python -c "import tomllib; deps = tomllib.load(open('pyproject.toml','rb'))['project']['dependencies']; print(' '.join(d for d in deps if d.startswith('arrowspace')))")
 
 FROM python:3.12-slim AS runtime
 
@@ -48,7 +45,7 @@ USER appuser
 
 EXPOSE 8000
 ENV ARRO_SERVER_HOST=0.0.0.0 \
-    ARRO_SERVER_PORT=8000
+    ARRO_BIND_PORT=8000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')" || exit 1

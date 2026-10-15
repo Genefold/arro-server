@@ -18,7 +18,7 @@ ArrowSpace object public surface::
     aspace.nclusters       int
     aspace.lambdas()       -> np.ndarray          eigenvalue vector
     aspace.lambdas_sorted()-> List[(float, int)]  sorted (value, original_index)
-    aspace.search(vec, gl, tau)             -> List[(int, float)]
+    aspace.search(vec, gl, tau, k=None)     -> List[(int, float)]
     aspace.search_batch(vecs, gl, tau)      -> List[List[(int, float)]]
     aspace.search_energy(vec, gl, k)        -> List[(int, float)]
     aspace.search_hybrid(vec, gl, alpha)    -> List[(int, float)]
@@ -78,6 +78,7 @@ from fastapi import HTTPException
 from .errors import MetadataUnavailable, OptionalDependencyMissing
 from .settings import get_settings
 from .slicing import enforce_items_window
+from .storage.tune_store import TuneStore
 
 log = logging.getLogger(__name__)
 
@@ -192,6 +193,15 @@ class ArrowSpaceAdapter(ABC):
     @abstractmethod
     def search_with_mode(self, dataset_id: str, query: dict[str, Any]) -> dict[str, Any]: ...
 
+    @abstractmethod
+    def graph_laplacian_info(self, dataset_id: str) -> dict[str, Any]: ...
+
+    @abstractmethod
+    def manifold_data(self, dataset_id: str) -> dict[str, Any]: ...
+
+    @abstractmethod
+    def stats_data(self, dataset_id: str) -> dict[str, Any]: ...
+
 
 # ---------------------------------------------------------------------------
 # Sidecar JSON adapter
@@ -285,6 +295,12 @@ class _SidecarAdapter(ArrowSpaceAdapter):
 
     def graph_laplacian_info(self, dataset_id: str) -> dict[str, Any]:
         raise OptionalDependencyMissing("arrowspace", "graph_laplacian_info")
+
+    def manifold_data(self, dataset_id: str) -> dict[str, Any]:
+        raise OptionalDependencyMissing("arrowspace", "manifold_data")
+
+    def stats_data(self, dataset_id: str) -> dict[str, Any]:
+        raise OptionalDependencyMissing("arrowspace", "stats_data")
 
     def get_item(self, dataset_id: str, idx: int) -> dict[str, Any]:
         raise OptionalDependencyMissing("arrowspace", "get_item")
@@ -412,6 +428,12 @@ class _UnavailableAdapter(ArrowSpaceAdapter):
 
     def search_with_mode(self, dataset_id, query):
         raise OptionalDependencyMissing("arrowspace", "search_with_mode")
+
+    def manifold_data(self, dataset_id):
+        raise OptionalDependencyMissing("arrowspace", "manifold_data")
+
+    def stats_data(self, dataset_id):
+        raise OptionalDependencyMissing("arrowspace", "stats_data")
 
 
 # ---------------------------------------------------------------------------
@@ -549,14 +571,50 @@ def _cleanup_files(files: set[Path]) -> None:
 
 
 class _ArrowSpaceAdapter(ArrowSpaceAdapter):
-    def __init__(self, module: Any, cache_size: int = 8) -> None:
+    def __init__(
+        self,
+        module: Any,
+        cache_size: int = 8,
+        tune_store: TuneStore | None = None,
+    ) -> None:
         super().__init__(available=True, backend="arrowspace")
         self._mod = module
         self._cache = _LRUIndexCache(maxsize=cache_size)
+        self._tune_store = tune_store
 
     @staticmethod
     def _slug(dataset_id: str) -> str:
         return dataset_id.replace("/", "__").replace("\\", "__")
+
+    def _resolve_graph_params(
+        self,
+        dataset_id: str,
+        user_params: dict[str, Any] | None,
+    ) -> tuple[dict[str, Any], str]:
+        """Resolve graph params: user_params merged over (tuned > default).
+
+        Returns ``(params, source)`` with source in {'user', 'tuned', 'default'};
+        used for logging only.  Partial user_params override individual keys;
+        missing keys fall through to tuned or default values, so the Rust
+        builder always receives all five required keys (issue #80).
+        """
+        if self._tune_store is not None:
+            tuned = self._tune_store.get(dataset_id)
+            if tuned is not None:
+                gp = tuned.to_graph_params()
+                # ponytail: tuner contract allows sigma=None, but the Rust
+                # builder needs a float — fall back to the default bandwidth.
+                if gp.get("sigma") is None:
+                    gp["sigma"] = DEFAULT_GRAPH_PARAMS["sigma"]
+                base, base_source = gp, "tuned"
+            else:
+                base, base_source = DEFAULT_GRAPH_PARAMS, "default"
+        else:
+            base, base_source = DEFAULT_GRAPH_PARAMS, "default"
+
+        if user_params is not None:
+            return {**base, **user_params}, "user"  # partial override
+        return base, base_source
 
     @staticmethod
     def _new_dataset_name(slug: str) -> str:
@@ -861,7 +919,8 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
         index_store: Path,
         graph_params: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        gp = graph_params or DEFAULT_GRAPH_PARAMS
+        gp, param_source = self._resolve_graph_params(dataset_id, graph_params)
+        log.debug("build_index '%s': using %s graph_params=%s", dataset_id, param_source, gp)
         arr64 = np.asarray(array, dtype=np.float64)
         if arr64.ndim != 2:
             raise ValueError(
@@ -918,6 +977,7 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
             "nitems": entry.nitems,
             "nfeatures": entry.nfeatures,
             "nclusters": entry.nclusters,
+            "graph_params": gp,
         }
 
         # Persist CSR (supplementary, for export/inspection)
@@ -1033,7 +1093,15 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
         entry = self._get_entry(dataset_id)
         q_arr = self._vec(query)
         tau = float(query.get("tau", 1.0))
-        hits = entry.aspace.search(q_arr, entry.gl, tau)
+        # Library signature: search(item, gl, tau, k=None) on arrowspace>=0.28.1
+        # (the declared minimum). k=None keeps the index's topk; an explicit k
+        # truncates the result list. No version probing: a TypeError from inside
+        # search() is a real failure and propagates (issue #80).
+        k = query.get("k")
+        if k is None:
+            hits = entry.aspace.search(q_arr, entry.gl, tau)
+        else:
+            hits = entry.aspace.search(q_arr, entry.gl, tau, k)
         return {
             "backend": "arrowspace",
             "results": [{"index": int(i), "score": float(s)} for i, s in hits],
@@ -1061,14 +1129,21 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
         }
 
     def search_energy(self, dataset_id: str, query: dict[str, Any]) -> dict[str, Any]:
-        entry = self._get_entry(dataset_id)
-        q_arr = self._vec(query)
-        k = int(query.get("k", DEFAULT_SEARCH_K))
-        hits = entry.aspace.search_energy(q_arr, entry.gl, k)
-        return {
-            "backend": "arrowspace",
-            "results": [{"index": int(i), "score": float(s)} for i, s in hits],
-        }
+        # Preserve the 404-if-no-index semantics before the 501 below.
+        self._get_entry(dataset_id)
+        # search_energy reads energymaps, which are only produced by
+        # ArrowSpaceBuilder.build_energy. arro-server builds indices with
+        # plain build() (no energymaps), so this mode is degenerate here —
+        # scores come back at ~1e-19 scale. Surface it as unimplemented
+        # instead of returning meaningless numbers.
+        raise HTTPException(
+            status_code=501,
+            detail=(
+                "search/energy requires an index built with build_energy "
+                "(energymaps); arro-server builds indices without energymaps. "
+                "Use taumode (default) or hybrid mode instead."
+            ),
+        )
 
     def search_hybrid(self, dataset_id: str, query: dict[str, Any]) -> dict[str, Any]:
         entry = self._get_entry(dataset_id)
@@ -1083,7 +1158,9 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
     def search_linear_sorted(self, dataset_id: str, query: dict[str, Any]) -> dict[str, Any]:
         entry = self._get_entry(dataset_id)
         q_arr = self._vec(query)
-        k = int(query.get("k", DEFAULT_SEARCH_K))
+        # query.get("k") may be None (unified route with k omitted) — fall
+        # back to the documented default instead of int(None).
+        k = int(query.get("k") or DEFAULT_SEARCH_K)
         hits = entry.aspace.search_linear_sorted(q_arr, entry.gl, k)
         return {
             "backend": "arrowspace",
@@ -1244,12 +1321,15 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
 
 
 @lru_cache(maxsize=1)
-def load() -> ArrowSpaceAdapter:
+def load(tune_store: TuneStore | None = None) -> ArrowSpaceAdapter:
     """Return the best available ArrowSpace adapter.
 
     Priority:
     1. arrowspace package importable  -> _ArrowSpaceAdapter
     2. fallback                       -> _SidecarAdapter
+
+    ``tune_store`` (from the DI layer) enables tuned-param resolution in
+    ``build_index``; when omitted the adapter falls back to defaults.
 
     FIX: broadened except to catch Exception (not just ImportError) because
     the installed arrowspace package raises NameError in __init__.py when its
@@ -1262,7 +1342,7 @@ def load() -> ArrowSpaceAdapter:
 
         cache_size = get_settings().index_cache_size
         log.info("arrowspace package found; using live adapter (cache_size=%d)", cache_size)
-        return _ArrowSpaceAdapter(_mod, cache_size=cache_size)
+        return _ArrowSpaceAdapter(_mod, cache_size=cache_size, tune_store=tune_store)
     except Exception:
         log.info("arrowspace package not available; using sidecar adapter")
         return _SidecarAdapter()

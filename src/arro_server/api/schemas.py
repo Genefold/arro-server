@@ -7,6 +7,7 @@ missing or wrongly-typed fields — before the route body ever runs.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
@@ -21,6 +22,9 @@ class SearchEnergyRequest(BaseModel):
     """Body for POST /datasets/{id}/search/energy.
 
     Real arrowspace signature: search_energy(vec, gl, k)
+
+    NOTE: currently returns 501 — energy search reads energymaps, produced
+    only by ArrowSpaceBuilder.build_energy, which arro-server does not call.
     """
 
     vector: list[float] = Field(..., description="Query vector (float64 values).")
@@ -98,7 +102,15 @@ class SearchModeRequest(BaseModel):
     )
     tau: float = Field(1.0, description="Tau param for taumode.")
     alpha: float = Field(0.5, ge=0.0, le=1.0, description="Blend for hybrid mode.")
-    k: int = Field(10, ge=1, description="Top-k for energy and linear_sorted.")
+    k: int | None = Field(
+        None,
+        ge=1,
+        description=(
+            "Top-k. taumode: truncates the result list (None keeps the index's "
+            "topk). linear_sorted: None falls back to 10. energy: rejected with "
+            "501 — requires energymaps, which arro-server does not build."
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -212,14 +224,19 @@ class VectorAppendResponse(BaseModel):
     """Response body for POST /api/datasets/{dataset_id}/vectors/append.
 
     Attributes:
-        start_row:  Row index of the first appended vector (= old row count).
-        appended:   Number of vectors written (= len(request.vectors)).
-        new_shape:  Updated array shape [new_nrows, D].
+        start_row:    Row index of the first appended vector (= old row count).
+        appended:     Number of vectors written (= len(request.vectors)).
+        new_shape:    Updated array shape [new_nrows, D].
+        index_stale:  True if an ArrowSpace index exists for this dataset and
+                      is now out of date (the append added rows not reflected
+                      in the index). The client should call
+                      POST /datasets/{id}/index to rebuild.
     """
 
     start_row: int
     appended: int
     new_shape: list[int]
+    index_stale: bool = False
 
 
 class RowUpdate(BaseModel):
@@ -257,11 +274,16 @@ class VectorOverwriteResponse(BaseModel):
     """Response body for POST /api/datasets/{dataset_id}/vectors/overwrite.
 
     Attributes:
-        overwritten: Number of rows written (= len(request.updates)).
-                     Shape of the array is unchanged.
+        overwritten:  Number of rows written (= len(request.updates)).
+                      Shape of the array is unchanged.
+        index_stale:  True if an ArrowSpace index exists for this dataset and
+                      is now out of date (the overwritten vectors are no longer
+                      reflected in the index). The client should call
+                      POST /datasets/{id}/index to rebuild.
     """
 
     overwritten: int
+    index_stale: bool = False
 
 
 class VectorCountResponse(BaseModel):
@@ -279,3 +301,152 @@ class VectorCountResponse(BaseModel):
     dataset_id: str
     nrows: int
     ncols: int
+
+
+# ---------------------------------------------------------------------------
+# Tune schemas (Issue #66)
+# ---------------------------------------------------------------------------
+
+
+class TuneRequest(BaseModel):
+    """Body for POST /datasets/{id}/tune.
+
+    All ranges are inclusive [low, high].  Omitting a range lets the
+    tuner use its own defaults (eps_low=0.5, eps_high=12.0, k_low=10,
+    k_high=45).
+
+    Attributes:
+        dataset:  Dataset ID to tune against.
+        eps_range: Optional [low, high] sweep for eps (graph connectivity
+                    threshold).  Both values must be > 0 and low <= high.
+        k_range:   Optional [low, high] sweep for k (lambda-graph neighbour
+                    count).  Both values must be >= 1 and low <= high.
+        n_trials:  Number of Optuna/hyperopt trials.  Clamped to [1, 500].
+    """
+
+    dataset: str = Field(
+        ...,
+        min_length=1,
+        max_length=256,
+        pattern=r"^[A-Za-z0-9_\-]+$",
+        description="Dataset ID to tune against.",
+    )
+    eps_range: tuple[float, float] | None = Field(
+        default=None,
+        description="Inclusive [low, high] sweep for eps. Both values must be > 0 and low <= high.",
+    )
+    k_range: tuple[int, int] | None = Field(
+        default=None,
+        description="Inclusive [low, high] sweep for k. Both values must be >= 1 and low <= high.",
+    )
+    n_trials: int = Field(
+        default=30,
+        ge=1,
+        le=500,
+        description="Number of Optuna/hyperopt trials.",
+    )
+
+    @model_validator(mode="after")
+    def _validate_ranges(self) -> TuneRequest:
+        if self.eps_range is not None:
+            low, high = self.eps_range
+            if low <= 0:
+                raise ValueError(f"eps_range: low bound must be > 0, got {low}")
+            if low > high:
+                raise ValueError(f"eps_range: low ({low}) must be <= high ({high})")
+        if self.k_range is not None:
+            low, high = self.k_range
+            if low < 1:
+                raise ValueError(f"k_range: low bound must be >= 1, got {low}")
+            if low > high:
+                raise ValueError(f"k_range: low ({low}) must be <= high ({high})")
+        return self
+
+
+class TunedParamsSchema(BaseModel):
+    """Serializable representation of a TunedParams dataclass.
+
+    Mirrors arro_server.storage.tune_store.TunedParams (eps/k/topk/p/sigma
+    lambda-graph parameters).  Validated on construction so the API never
+    surfaces a corrupt store entry as a 200 response.
+
+    Attributes:
+        eps:      Neighbourhood radius / graph connectivity threshold.  Must be > 0.
+        k:        Lambda-graph neighbour count.  Must be >= 1.
+        topk:     Retrieval neighbour count at query time.  1 <= topk <= k.
+        p:        Minkowski p-norm.  Must be > 0.
+        sigma:    RBF kernel bandwidth, or None (allowed per tuner contract).
+        score:    Tuning objective score. Unbounded above 0.0 — the composite
+                  objective is 0.7*mrr + 0.2*log1p(fiedler) + 0.1*log1p(var).
+        tuned_at: ISO 8601 UTC timestamp of when tuning completed.
+        dataset:  Dataset this result belongs to.
+    """
+
+    eps: float = Field(..., gt=0.0)
+    k: int = Field(..., ge=1)
+    topk: int = Field(..., ge=1)
+    p: float = Field(..., gt=0.0)
+    sigma: float | None = Field(default=None, gt=0.0)
+    score: float = Field(
+        ...,
+        ge=0.0,
+        description="Tuning objective score. Unbounded above — composite of MRR, "
+        "Fiedler and lambda-variance terms.",
+    )
+    tuned_at: str = Field(
+        ...,
+        description="ISO 8601 UTC timestamp, e.g. '2026-09-17T14:00:00+00:00'.",
+    )
+    dataset: str = Field(..., min_length=1)
+
+    model_config = {"from_attributes": True}
+
+    @model_validator(mode="after")
+    def _validate_cross_field(self) -> TunedParamsSchema:
+        if self.topk > self.k:
+            raise ValueError(f"topk ({self.topk}) must be <= k ({self.k})")
+        try:
+            datetime.fromisoformat(self.tuned_at)
+        except ValueError as exc:
+            raise ValueError(
+                f"tuned_at is not a valid ISO 8601 timestamp: {self.tuned_at!r}"
+            ) from exc
+        return self
+
+
+class TuneStartResponse(BaseModel):
+    """Response for POST /datasets/{id}/tune (202 Accepted).
+
+    Attributes:
+        dataset: Dataset ID the request targeted.
+        status:  'started' — a new job was launched.
+                 'running' — a job was already in progress (idempotent no-op).
+    """
+
+    dataset: str
+    status: Literal["started", "running"]
+
+
+class TuneStatusResponse(BaseModel):
+    """Response for GET /datasets/{id}/tune/status.
+
+    Attributes:
+        dataset: Dataset ID this status belongs to.
+        status:  Current tuning state.
+                  'not_started' — no tune run has been recorded.
+                  'running'     — a tune job is currently in progress.
+                  'done'        — tuning has completed; params is populated.
+        params:  Tuned parameters.  Present only when status == 'done'.
+    """
+
+    dataset: str
+    status: Literal["running", "done", "not_started"]
+    params: TunedParamsSchema | None = None
+
+    @model_validator(mode="after")
+    def _params_present_iff_done(self) -> TuneStatusResponse:
+        if self.status == "done" and self.params is None:
+            raise ValueError("params must be set when status is 'done'")
+        if self.status != "done" and self.params is not None:
+            raise ValueError(f"params must be None when status is '{self.status}'")
+        return self

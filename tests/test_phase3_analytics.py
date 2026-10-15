@@ -242,7 +242,10 @@ class TestSearchMode:
             f"/api/datasets/{DATASET_ID}/search",
             json={"vector": vec, "mode": "energy", "k": 5},
         )
-        assert r.status_code == 200
+        # Energy search requires energymaps (build_energy), which arro-server
+        # does not produce — the adapter surfaces it as 501.
+        assert r.status_code == 501
+        assert "build_energy" in r.json()["detail"]
 
     def test_search_mode_linear_sorted(self, client: TestClient) -> None:
         vec = RNG.standard_normal(N_FEATURES).tolist()
