@@ -6,6 +6,10 @@ on:
   push:
     branches: [main]
 
+env:
+  # Match the container runtime rather than selecting a new Python implicitly.
+  UV_PYTHON: "3.12"
+
 jobs:
   lint:
     name: Lint (ruff)
@@ -17,10 +21,10 @@ jobs:
         uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
 
       - name: Set up Python
-        run: uv python install
+        run: uv python install 3.12
 
       - name: Install dev dependencies
-        run: uv sync --extra dev
+        run: uv sync --locked --extra dev
 
       - name: Ruff lint check
         run: uv run ruff check . --exclude tests
@@ -38,10 +42,10 @@ jobs:
         uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
 
       - name: Set up Python
-        run: uv python install
+        run: uv python install 3.12
 
       - name: Install dev dependencies
-        run: uv sync --extra dev
+        run: uv sync --locked --extra dev
 
       - name: Run tests
         run: uv run pytest

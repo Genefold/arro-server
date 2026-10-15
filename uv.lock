@@ -90,8 +90,8 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "arrowspace", specifier = ">=0.28.1" },
-    { name = "arrowspace-tuner", specifier = ">=0.5.0,<0.6" },
+    { name = "arrowspace", specifier = "==0.29.0" },
+    { name = "arrowspace-tuner", specifier = "==0.5.1" },
     { name = "fastapi", specifier = ">=0.110" },
     { name = "fastapi", extras = ["standard"], marker = "extra == 'dev'", specifier = ">=0.110" },
     { name = "fsspec", marker = "extra == 'dev'", specifier = ">=2024.2" },
@@ -112,7 +112,7 @@ provides-extras = ["arrow", "dev"]
 
 [[package]]
 name = "arrowspace"
-version = "0.28.1"
+version = "0.29.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy" },
@@ -120,14 +120,30 @@ dependencies = [
     { name = "pyarrow" },
     { name = "scikit-learn" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/b2/9b/b48e7cee33ef72a40a0a6a056518e4af04e5c97697e425b17a6c2f789eae/arrowspace-0.28.1.tar.gz", hash = "sha256:93abaa21b2a701236812fa5bfd2e99eb2a688c58d208f6d627071c9be9e199ff", size = 18668350, upload-time = "2026-09-08T09:48:13.095Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/69/a1/fdd2499252a9f5dce0fd44401580b69d31811122364289f66b865aafb95c/arrowspace-0.29.0.tar.gz", hash = "sha256:24a670c4bffe9c00b69f07247abb15072ed1fa69c92086fae2c4773c58e8d630", size = 18672971, upload-time = "2026-10-12T10:22:10.899Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/67/63/8f3111f14b28d7042bf77016de005423db4703725ddb3421424f6c9af049/arrowspace-0.28.1-cp314-cp314-macosx_11_0_arm64.whl", hash = "sha256:392ac5c6b1011bf08ea0630476b1542c37b6e1b7e2e56f4db016ecd0ec17b89c", size = 3261161, upload-time = "2026-09-08T09:48:08.268Z" },
+    { url = "https://files.pythonhosted.org/packages/81/d6/06a5321d6d139905beeae481d25a9e4b3c1c34cfebcb46851d130078650b/arrowspace-0.29.0-cp312-cp312-macosx_10_12_x86_64.whl", hash = "sha256:724bf600afdc0be123913030a51ea64e953cc491ca53d23b0f2f7b48ccaf63ac", size = 3635296, upload-time = "2026-10-12T10:21:40.867Z" },
+    { url = "https://files.pythonhosted.org/packages/b9/90/ed4a779148c904e648e73c1e3e6cdb6a4bb2137ba6351a5d304ac530e7cd/arrowspace-0.29.0-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:e53e2a8a05b46748c40417fa5e1b59de67e6520e4e15eb76d93f6bbb8ea384dd", size = 3373257, upload-time = "2026-10-12T10:21:42.782Z" },
+    { url = "https://files.pythonhosted.org/packages/ba/b0/736c2578143b25459926b3687277963c217150d57e7b268ff88723b81782/arrowspace-0.29.0-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:36be04238ceb9b9e108ab0952a12c71476e2bd5ef414476e502ea621f0cba30a", size = 3590721, upload-time = "2026-10-12T10:21:44.511Z" },
+    { url = "https://files.pythonhosted.org/packages/ed/0c/65c8ab80156a092316cdb5c40248bf7dccff815a2d72790a554b3befabb9/arrowspace-0.29.0-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:4f1ba8e209638e09a9f619d98b5bcb2b7eec7796bb5af1d581ca9efd4aec163c", size = 3794351, upload-time = "2026-10-12T10:21:46.014Z" },
+    { url = "https://files.pythonhosted.org/packages/75/69/bd95e90d1072662ca4f0fbab3e27f9dc393102b7055dc764012883de1202/arrowspace-0.29.0-cp312-cp312-win_amd64.whl", hash = "sha256:c48d01d48c2c7df1f2bcc82fd87cba3a9f3ce1f13ea3de3eff7a9e43bda95940", size = 3796536, upload-time = "2026-10-12T10:21:47.582Z" },
+    { url = "https://files.pythonhosted.org/packages/f5/dd/4e8f446778937402e553b88254317b29893ba1f4b8421b7008b76b3c9cb3/arrowspace-0.29.0-cp313-cp313-macosx_10_12_x86_64.whl", hash = "sha256:ef5dd1c20801fc60eab2f5bb507134ead28f5451d862a3b73344135f3b4c06ce", size = 3636438, upload-time = "2026-10-12T10:21:49.619Z" },
+    { url = "https://files.pythonhosted.org/packages/39/44/78fdfea51564776d1d455d43e08e2fe3a40ac3cacb5958c25d615a83b48e/arrowspace-0.29.0-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:4eaaae25f6b907fbef77e85c936903d9e08baf4bb513e8e33388850eb5b57236", size = 3375603, upload-time = "2026-10-12T10:21:51.313Z" },
+    { url = "https://files.pythonhosted.org/packages/82/0a/eaef8c834c92a8ede28ab7f6e481f02c100f72cdbd18bbaeea58f748f818/arrowspace-0.29.0-cp313-cp313-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:466515e829070f7ed0254bea4c73e734a0876e44284234f56a830ef1800dcd27", size = 3591298, upload-time = "2026-10-12T10:21:53.01Z" },
+    { url = "https://files.pythonhosted.org/packages/66/ab/a312c8a865d4f58858e4b8773a7c4e153ba51866082999553d1305a8aa46/arrowspace-0.29.0-cp313-cp313-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:5e584549a0764bfe0334dbd3f1611c76d56b48159b41cd4731ebdeb7f16f8433", size = 3796026, upload-time = "2026-10-12T10:21:54.464Z" },
+    { url = "https://files.pythonhosted.org/packages/e6/12/3bd9566cb1998abd62733bdeca0911ae755b59a6a0686d28752adf9ec5fd/arrowspace-0.29.0-cp313-cp313-win_amd64.whl", hash = "sha256:d5c1a643c24d52d1f982ed4b963fd0537e091e1ed99e01f156c594c14b149689", size = 3797545, upload-time = "2026-10-12T10:21:56.099Z" },
+    { url = "https://files.pythonhosted.org/packages/86/af/c80788fe58d9c59b3d2ad4a46df5785e5ee0148ad1762e2e172a6bb26953/arrowspace-0.29.0-cp314-cp314-macosx_10_12_x86_64.whl", hash = "sha256:e4387572e0e7b70a498bf001bb0afc1e1419d3ad36e071a23f1c081de10dec0c", size = 3635359, upload-time = "2026-10-12T10:21:57.638Z" },
+    { url = "https://files.pythonhosted.org/packages/ae/5d/7158e95e17ef03475f51bb804fb55c587d9dba1aa4bab8ae11cd8bc5c209/arrowspace-0.29.0-cp314-cp314-macosx_11_0_arm64.whl", hash = "sha256:952f6bcd85dd72ab4bcf3addffb238f12d6a82fd68f80dbe98ca6d043c2f5934", size = 3373646, upload-time = "2026-10-12T10:21:59.454Z" },
+    { url = "https://files.pythonhosted.org/packages/bc/d0/01bfbd16c02acffd1b0cd400e02f69b9bb94378ab4d877677e7b79827b30/arrowspace-0.29.0-cp314-cp314-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:d8e7aafd2f855c5ed3f90f1fcc099de0e5e2795b46d0f76ac475753fd77d1008", size = 3590751, upload-time = "2026-10-12T10:22:01.602Z" },
+    { url = "https://files.pythonhosted.org/packages/ea/6e/ad484225cded2e3dde5de216018e5da978bf78e0913541d154a029d01f26/arrowspace-0.29.0-cp314-cp314-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:e642d6702444cb0147049c40a6e265242f1f23d2e464038450a106da5c972d59", size = 3793933, upload-time = "2026-10-12T10:22:03.122Z" },
+    { url = "https://files.pythonhosted.org/packages/70/bc/665dc675931c16d89a893f608010a3547859fbf70caa0bb6fe71fc02d300/arrowspace-0.29.0-cp314-cp314-win_amd64.whl", hash = "sha256:f9424a7d747f3c3717f7ac1c541e42c3d192bcf7a196d45092ba1b4df70b15a0", size = 3796793, upload-time = "2026-10-12T10:22:04.568Z" },
+    { url = "https://files.pythonhosted.org/packages/1e/58/6502ba3e323395ff4cb0c39f8b7917293b124bc6cff80cd447b0ddce8f0f/arrowspace-0.29.0-cp314-cp314t-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:a1072cf3ec0cbfca0e118dda374d633d5d6de7209c290214908a51cde785e1f5", size = 3585295, upload-time = "2026-10-12T10:22:06.785Z" },
+    { url = "https://files.pythonhosted.org/packages/f5/9e/135d22b9c1c34db753690dcc991b43112b8cda8a8146a9c49aa9fb516cdf/arrowspace-0.29.0-cp314-cp314t-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:8f6876cc29d71edaf2f9241da6912e4ffbb7a31e39a5effd7abf8d52050631a3", size = 3790263, upload-time = "2026-10-12T10:22:09.091Z" },
 ]
 
 [[package]]
 name = "arrowspace-tuner"
-version = "0.5.0"
+version = "0.5.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "arrowspace" },
@@ -136,9 +152,9 @@ dependencies = [
     { name = "optuna" },
     { name = "scipy" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/a6/f9/ae7f68f66140bfa9f879cb9363c11aa0a34a86db2b614c99ca4eb311b43f/arrowspace_tuner-0.5.0.tar.gz", hash = "sha256:6770bb20fdadecaa5c190e725d129377d51edc21e024caec626a8b1fa1fe2711", size = 459400, upload-time = "2026-09-10T09:26:56.952Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/39/cd/35df0780565f1d5468469d720eac1940ef6ed8682a4412c1821d526be77f/arrowspace_tuner-0.5.1.tar.gz", hash = "sha256:ea13624affac6f8e8af1af4a1c450c9c0e64bf29a7d4835ae883238eb46178c3", size = 354585, upload-time = "2026-10-15T07:08:33.53Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/0a/e9/c563c449bcd709bfc3527968c912a6d9e10de5f292d981265d26e3a44999/arrowspace_tuner-0.5.0-py3-none-any.whl", hash = "sha256:cd7baf03be82dba5a978f896dd7b84f307fb8072050d5660e6e74ca08f022749", size = 47031, upload-time = "2026-09-10T09:26:54.72Z" },
+    { url = "https://files.pythonhosted.org/packages/fe/44/d91ff7261d448303be3adbda8189830624b5b10fab55b1ebdc90928fd201/arrowspace_tuner-0.5.1-py3-none-any.whl", hash = "sha256:ce22b567e16be8f4649f72267a47e21b5c25b64ab028ed18a2c0f79cb422fe66", size = 47038, upload-time = "2026-10-15T07:08:31.993Z" },
 ]
 
 [[package]]

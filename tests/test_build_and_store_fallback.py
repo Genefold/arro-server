@@ -112,18 +112,12 @@ def _make_with_persistence_mod() -> types.ModuleType:
     gl = _make_fake_gl()
 
     class FakeBuilderWithPersistence:
-        def with_lambda_graph(self, eps, k, topk, p, sigma):
-            return self
-
-        def with_sparsity_check(self, value):
-            return self
-
         def with_persistence(self, store_path: str, dataset_name: str):
             self._store_path = store_path
             self._dataset_name = dataset_name
             return self
 
-        def build(self, rows):
+        def build(self, graph_params, array):
             store = Path(self._store_path)
             store.mkdir(parents=True, exist_ok=True)
             (store / f"{self._dataset_name}-raw_input.parquet").write_bytes(b"wp-raw")
