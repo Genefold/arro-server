@@ -91,7 +91,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "arrowspace", specifier = "==0.29.0" },
-    { name = "arrowspace-tuner", url = "https://github.com/Genefold/arrowspace_tuner/archive/729e3713656320680721273a7594d68a536a380b.tar.gz" },
+    { name = "arrowspace-tuner", specifier = "==0.5.1" },
     { name = "fastapi", specifier = ">=0.110" },
     { name = "fastapi", extras = ["standard"], marker = "extra == 'dev'", specifier = ">=0.110" },
     { name = "fsspec", marker = "extra == 'dev'", specifier = ">=2024.2" },
@@ -144,7 +144,7 @@ wheels = [
 [[package]]
 name = "arrowspace-tuner"
 version = "0.5.1"
-source = { url = "https://github.com/Genefold/arrowspace_tuner/archive/729e3713656320680721273a7594d68a536a380b.tar.gz" }
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "arrowspace" },
     { name = "click" },
@@ -152,27 +152,10 @@ dependencies = [
     { name = "optuna" },
     { name = "scipy" },
 ]
-sdist = { hash = "sha256:beb0abd71cd3ab1121e8b98e28c23b61a1bcd7433af40d2b41dd93b952a28901" }
-
-[package.metadata]
-requires-dist = [
-    { name = "arrowspace", specifier = ">=0.26.0,<0.30" },
-    { name = "click", specifier = ">=8.1" },
-    { name = "mcp", marker = "extra == 'dev'", specifier = ">=1.0.0" },
-    { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.0.0" },
-    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.15" },
-    { name = "numpy", specifier = ">=2.4.4" },
-    { name = "optuna", specifier = ">=4.8.0" },
-    { name = "pandas", marker = "extra == 'dev'", specifier = ">=3.0.0" },
-    { name = "pandas", marker = "extra == 'report'", specifier = ">=3.0.0" },
-    { name = "plotly", marker = "extra == 'dev'", specifier = ">=6.7.0" },
-    { name = "plotly", marker = "extra == 'report'", specifier = ">=6.7.0" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
-    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5.0" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.9" },
-    { name = "scipy", specifier = ">=1.17.1" },
+sdist = { url = "https://files.pythonhosted.org/packages/39/cd/35df0780565f1d5468469d720eac1940ef6ed8682a4412c1821d526be77f/arrowspace_tuner-0.5.1.tar.gz", hash = "sha256:ea13624affac6f8e8af1af4a1c450c9c0e64bf29a7d4835ae883238eb46178c3", size = 354585, upload-time = "2026-10-15T07:08:33.53Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/fe/44/d91ff7261d448303be3adbda8189830624b5b10fab55b1ebdc90928fd201/arrowspace_tuner-0.5.1-py3-none-any.whl", hash = "sha256:ce22b567e16be8f4649f72267a47e21b5c25b64ab028ed18a2c0f79cb422fe66", size = 47038, upload-time = "2026-10-15T07:08:31.993Z" },
 ]
-provides-extras = ["report", "mcp", "dev"]
 
 [[package]]
 name = "certifi"
